@@ -1082,6 +1082,35 @@ function normalizeInstanceShape(instance) {
     return normalized;
 }
 
+function normalizeScriptParent(parent) {
+    if (typeof parent !== 'string') {
+        return parent;
+    }
+
+    const normalized = parent.trim();
+    const aliases = new Map([
+        ['StarterPlayer.StarterPlayerScripts', 'StarterPlayerScripts'],
+        ['game.StarterPlayer.StarterPlayerScripts', 'StarterPlayerScripts'],
+        ['game.ServerScriptService', 'ServerScriptService'],
+        ['game.ReplicatedStorage', 'ReplicatedStorage'],
+        ['game.StarterGui', 'StarterGui'],
+        ['game.Workspace', 'Workspace'],
+        ['workspace', 'Workspace'],
+    ]);
+
+    return aliases.get(normalized) || normalized;
+}
+
+function normalizeScriptShape(script) {
+    if (!script || typeof script !== 'object' || Array.isArray(script)) {
+        return script;
+    }
+
+    const normalized = { ...script };
+    normalized.parent = normalizeScriptParent(normalized.parent);
+    return normalized;
+}
+
 function normalizeParsedResponseShape(data) {
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
         return data;
@@ -1091,6 +1120,10 @@ function normalizeParsedResponseShape(data) {
 
     if (Array.isArray(normalized.instances)) {
         normalized.instances = normalized.instances.map(normalizeInstanceShape);
+    }
+
+    if (Array.isArray(normalized.scripts)) {
+        normalized.scripts = normalized.scripts.map(normalizeScriptShape);
     }
 
     return normalized;
