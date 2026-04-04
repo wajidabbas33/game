@@ -923,6 +923,7 @@ local function clearInfoBoxes()
     explainBox.Visible  = false
     errorBox.Visible    = false
     warningBox.Visible  = false
+    phaseLabel.Text     = ""
     scriptViewer.Text = ""
     scriptViewer.Visible = false
     scriptViewerEmpty.Visible = true
@@ -1231,6 +1232,7 @@ local function doGenerate(promptText)
     if not promptText or promptText:match("^%s*$") then return end
 
     pendingPreview = nil
+    nextPhasePrompt = nil
     setBusy(true)
     clearInfoBoxes()
     setStatus("Submitting generation request...")

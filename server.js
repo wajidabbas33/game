@@ -1056,6 +1056,46 @@ function buildCompletionRequest(messages, options = {}) {
     return request;
 }
 
+function normalizeInstanceShape(instance) {
+    if (!instance || typeof instance !== 'object' || Array.isArray(instance)) {
+        return instance;
+    }
+
+    const normalized = { ...instance };
+    const originalProperties = (
+        normalized.properties
+        && typeof normalized.properties === 'object'
+        && !Array.isArray(normalized.properties)
+    ) ? { ...normalized.properties } : {};
+
+    for (const [key, value] of Object.entries(normalized)) {
+        if (key === 'className' || key === 'parent' || key === 'properties') {
+            continue;
+        }
+        if (originalProperties[key] === undefined) {
+            originalProperties[key] = value;
+        }
+        delete normalized[key];
+    }
+
+    normalized.properties = originalProperties;
+    return normalized;
+}
+
+function normalizeParsedResponseShape(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        return data;
+    }
+
+    const normalized = { ...data };
+
+    if (Array.isArray(normalized.instances)) {
+        normalized.instances = normalized.instances.map(normalizeInstanceShape);
+    }
+
+    return normalized;
+}
+
 async function repairStructuredResponse({ prompt, rawText, performanceSystemMessage, validationErrors }) {
     const repairMessages = [
         { role: 'system', content: FAST_SYSTEM_PROMPT },
@@ -1270,6 +1310,8 @@ app.post('/generate', apiLimiter, async (req, res) => {
             }
         }
 
+        parsed = normalizeParsedResponseShape(parsed);
+
         // [B1] JSON structure validation
         let validation = validateResponseStructure(parsed);
         if (!validation.valid) {
@@ -1280,6 +1322,7 @@ app.post('/generate', apiLimiter, async (req, res) => {
                     performanceSystemMessage,
                     validationErrors: validation.errors,
                 });
+                parsed = normalizeParsedResponseShape(parsed);
                 validation = validateResponseStructure(parsed);
                 if (validation.valid) {
                     console.warn('Recovered invalid response structure with repair pass.');
@@ -1293,6 +1336,7 @@ app.post('/generate', apiLimiter, async (req, res) => {
             const fallback = buildDeterministicFallback(prompt);
             if (fallback) {
                 parsed = fallback;
+                parsed = normalizeParsedResponseShape(parsed);
                 validation = validateResponseStructure(parsed);
                 console.warn('Recovered invalid response structure with deterministic fallback.');
             }
