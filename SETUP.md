@@ -27,7 +27,7 @@ Edit the `.env` file and paste your API key:
 
 ```env
 QWEN_API_KEY=sk-your-key-here
-QWEN_MODEL=qwen3.5-plus
+QWEN_MODEL=qwen3.6-plus
 AI_PROVIDER=qwen
 ```
 

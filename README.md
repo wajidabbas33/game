@@ -43,7 +43,7 @@ A complete AI-powered plugin for Roblox Studio that generates game scripts and o
    Create or edit `.env` file with your Qwen API key:
    ```env
    QWEN_API_KEY=your_qwen_api_key_here
-   QWEN_MODEL=qwen3.5-plus
+   QWEN_MODEL=qwen3.6-plus
    AI_PROVIDER=qwen
    ```
    
@@ -211,7 +211,7 @@ Tests include:
 ### Backend Environment Variables
 
 - `QWEN_API_KEY` - Your Qwen / DashScope API key
-- `QWEN_MODEL` - Qwen model to use (default: `qwen3.5-plus`)
+- `QWEN_MODEL` - Qwen model to use (default: `qwen3.6-plus`)
 - `AI_PROVIDER` - `qwen` or `openai` (default auto-detects, but this project uses `qwen`)
 - `OPENAI_API_KEY` - Optional OpenAI fallback key
 - `PORT` - Server port (default: 3000)

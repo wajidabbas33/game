@@ -76,19 +76,26 @@ widget.Title = "Roblox AI Assistant"
 
 -- ── Colour palette ────────────────────────────────────────────
 local C = {
-    bg        = Color3.fromRGB(28,  28,  28),
-    surface   = Color3.fromRGB(42,  42,  42),
-    input     = Color3.fromRGB(55,  55,  55),
-    border    = Color3.fromRGB(70,  70,  70),
-    accent    = Color3.fromRGB(0,  162, 255),
-    accentDim = Color3.fromRGB(0,   90, 140),
-    danger    = Color3.fromRGB(210,  55,  55),
-    warning   = Color3.fromRGB(220, 160,  30),
-    white     = Color3.new(1, 1, 1),
-    subtext   = Color3.fromRGB(160, 160, 160),
-    green     = Color3.fromRGB(80,  200,  80),
-    red       = Color3.fromRGB(220,  70,  70),
-    orange    = Color3.fromRGB(220, 140,  40),
+    bg         = Color3.fromRGB(17, 22, 29),
+    surface    = Color3.fromRGB(28, 34, 44),
+    surfaceAlt = Color3.fromRGB(33, 40, 52),
+    input      = Color3.fromRGB(36, 43, 56),
+    border     = Color3.fromRGB(64, 73, 90),
+    accent     = Color3.fromRGB(72, 140, 255),
+    accentDim  = Color3.fromRGB(49, 102, 189),
+    accentSoft = Color3.fromRGB(31, 58, 104),
+    danger     = Color3.fromRGB(198, 79, 72),
+    dangerDim  = Color3.fromRGB(117, 58, 55),
+    warning    = Color3.fromRGB(210, 166, 76),
+    white      = Color3.fromRGB(244, 247, 251),
+    subtext    = Color3.fromRGB(150, 160, 178),
+    muted      = Color3.fromRGB(110, 121, 140),
+    green      = Color3.fromRGB(103, 192, 128),
+    greenSoft  = Color3.fromRGB(39, 72, 49),
+    red        = Color3.fromRGB(235, 123, 116),
+    redSoft    = Color3.fromRGB(85, 44, 43),
+    orange     = Color3.fromRGB(233, 181, 97),
+    orangeSoft = Color3.fromRGB(89, 68, 39),
 }
 
 -- ── Root scroll frame ─────────────────────────────────────────
@@ -96,14 +103,14 @@ local root = Instance.new("ScrollingFrame")
 root.Size                = UDim2.new(1, 0, 1, 0)
 root.BackgroundColor3    = C.bg
 root.BorderSizePixel     = 0
-root.ScrollBarThickness  = 4
+root.ScrollBarThickness  = 6
 root.ScrollBarImageColor3= C.accent
 root.AutomaticCanvasSize = Enum.AutomaticSize.Y
 root.CanvasSize          = UDim2.new(1, 0, 0, 0)
 root.Parent              = widget
 
 local layout = Instance.new("UIListLayout")
-layout.Padding             = UDim.new(0, 8)
+layout.Padding             = UDim.new(0, 12)
 layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 layout.SortOrder           = Enum.SortOrder.LayoutOrder
 layout.Parent              = root
@@ -113,68 +120,109 @@ layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
 end)
 
 local rootPad = Instance.new("UIPadding")
-rootPad.PaddingTop    = UDim.new(0, 10)
-rootPad.PaddingBottom = UDim.new(0, 10)
-rootPad.PaddingLeft   = UDim.new(0, 10)
-rootPad.PaddingRight  = UDim.new(0, 10)
+rootPad.PaddingTop    = UDim.new(0, 12)
+rootPad.PaddingBottom = UDim.new(0, 12)
+rootPad.PaddingLeft   = UDim.new(0, 12)
+rootPad.PaddingRight  = UDim.new(0, 12)
 rootPad.Parent        = root
 
 -- ── UI helpers ────────────────────────────────────────────────
-local function makeFrame(order, height, bg)
+local function applyCorner(gui, radius)
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, radius or 8)
+    corner.Parent = gui
+    return corner
+end
+
+local function applyStroke(gui, color, thickness, transparency)
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = color or C.border
+    stroke.Thickness = thickness or 1
+    stroke.Transparency = transparency or 0
+    stroke.Parent = gui
+    return stroke
+end
+
+local function makeFrame(order, height, bg, parent)
     local f = Instance.new("Frame")
     f.Size             = UDim2.new(1, 0, 0, height)
     f.BackgroundColor3 = bg or C.surface
     f.BorderSizePixel  = 0
     f.LayoutOrder      = order
-    f.Parent           = root
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 5)
-    corner.Parent = f
+    f.Parent           = parent or root
+    applyCorner(f, 8)
     return f
 end
 
-local function makeLabel(text, order, height, color, bold, wrap)
+local function makeCard(order)
+    local card = Instance.new("Frame")
+    card.Size = UDim2.new(1, 0, 0, 0)
+    card.AutomaticSize = Enum.AutomaticSize.Y
+    card.BackgroundColor3 = C.surface
+    card.BorderSizePixel = 0
+    card.LayoutOrder = order
+    card.Parent = root
+    applyCorner(card, 10)
+    applyStroke(card, C.border, 1, 0.35)
+
+    local pad = Instance.new("UIPadding")
+    pad.PaddingTop = UDim.new(0, 12)
+    pad.PaddingBottom = UDim.new(0, 12)
+    pad.PaddingLeft = UDim.new(0, 12)
+    pad.PaddingRight = UDim.new(0, 12)
+    pad.Parent = card
+
+    local cardLayout = Instance.new("UIListLayout")
+    cardLayout.Padding = UDim.new(0, 8)
+    cardLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    cardLayout.Parent = card
+
+    return card
+end
+
+local function makeLabel(text, order, height, color, bold, wrap, parent, font, size)
     local lbl = Instance.new("TextLabel")
     lbl.Text              = text
     lbl.TextColor3        = color or C.white
     lbl.BackgroundTransparency = 1
     lbl.Size              = UDim2.new(1, 0, 0, height or 20)
     lbl.TextXAlignment    = Enum.TextXAlignment.Left
-    lbl.Font              = bold and Enum.Font.SourceSansBold or Enum.Font.SourceSans
-    lbl.TextSize          = 14
+    lbl.TextYAlignment    = Enum.TextYAlignment.Top
+    lbl.Font              = font or (bold and Enum.Font.GothamBold or Enum.Font.Gotham)
+    lbl.TextSize          = size or 14
     lbl.TextWrapped       = wrap ~= false
     lbl.LayoutOrder       = order
-    lbl.Parent            = root
+    lbl.Parent            = parent or root
     return lbl
 end
 
-local function makeButton(text, order, bg, height)
+local function makeButton(text, order, bg, height, parent)
     local btn = Instance.new("TextButton")
     btn.Size             = UDim2.new(1, 0, 0, height or 34)
     btn.BackgroundColor3 = bg or C.accent
     btn.Text             = text
     btn.TextColor3       = C.white
-    btn.Font             = Enum.Font.SourceSansBold
-    btn.TextSize         = 15
+    btn.Font             = Enum.Font.GothamBold
+    btn.TextSize         = 14
     btn.LayoutOrder      = order
     btn.AutoButtonColor  = true
-    btn.Parent           = root
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 5)
-    corner.Parent = btn
+    btn.Parent           = parent or root
+    applyCorner(btn, 8)
+    applyStroke(btn, C.border, 1, 0.45)
     return btn
 end
 
-local function makeDivider(order)
+local function makeDivider(order, parent)
     local f = Instance.new("Frame")
     f.Size             = UDim2.new(1, 0, 0, 1)
     f.BackgroundColor3 = C.border
     f.BorderSizePixel  = 0
     f.LayoutOrder      = order
-    f.Parent           = root
+    f.BackgroundTransparency = 0.35
+    f.Parent           = parent or root
 end
 
-local function makeInfoBox(order, bg, textColor)
+local function makeInfoBox(order, bg, textColor, parent)
     local lbl = Instance.new("TextLabel")
     lbl.Size             = UDim2.new(1, 0, 0, 0)
     lbl.AutomaticSize    = Enum.AutomaticSize.Y
@@ -182,113 +230,195 @@ local function makeInfoBox(order, bg, textColor)
     lbl.TextColor3       = textColor or C.white
     lbl.Text             = ""
     lbl.TextWrapped      = true
-    lbl.Font             = Enum.Font.SourceSans
+    lbl.Font             = Enum.Font.Gotham
     lbl.TextSize         = 13
     lbl.TextXAlignment   = Enum.TextXAlignment.Left
+    lbl.TextYAlignment   = Enum.TextYAlignment.Top
     lbl.LayoutOrder      = order
     lbl.Visible          = false
-    lbl.Parent           = root
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 5)
-    corner.Parent = lbl
+    lbl.Parent           = parent or root
+    applyCorner(lbl, 8)
+    applyStroke(lbl, C.border, 1, 0.5)
     local pad = Instance.new("UIPadding")
-    pad.PaddingLeft   = UDim.new(0, 7)
-    pad.PaddingRight  = UDim.new(0, 7)
-    pad.PaddingTop    = UDim.new(0, 5)
-    pad.PaddingBottom = UDim.new(0, 5)
+    pad.PaddingLeft   = UDim.new(0, 10)
+    pad.PaddingRight  = UDim.new(0, 10)
+    pad.PaddingTop    = UDim.new(0, 8)
+    pad.PaddingBottom = UDim.new(0, 8)
     pad.Parent = lbl
     return lbl
 end
 
 -- ── UI layout ─────────────────────────────────────────────────
--- Section 1: Header
-makeLabel("🤖  Roblox AI Studio", 1, 24, C.white, true)
-makeLabel("Type a command — AI generates and applies it.", 2, 17, C.subtext)
-makeDivider(3)
+local headerCard = makeCard(1)
+makeLabel("Roblox AI Assistant", 1, 24, C.white, true, false, headerCard, Enum.Font.GothamBold, 18)
+makeLabel(
+    "Generate scripts, structures, and gameplay systems directly into your Studio project.",
+    2, 34, C.subtext, false, true, headerCard, Enum.Font.Gotham, 13
+)
 
--- Section 2: Backend URL config [B7]
-makeLabel("Backend URL", 4, 18, C.subtext, true)
+local flowFrame = Instance.new("Frame")
+flowFrame.Size = UDim2.new(1, 0, 0, 30)
+flowFrame.BackgroundColor3 = C.accentSoft
+flowFrame.BorderSizePixel = 0
+flowFrame.LayoutOrder = 3
+flowFrame.Parent = headerCard
+applyCorner(flowFrame, 8)
+applyStroke(flowFrame, C.accent, 1, 0.45)
+
+local flowPad = Instance.new("UIPadding")
+flowPad.PaddingLeft = UDim.new(0, 10)
+flowPad.PaddingRight = UDim.new(0, 10)
+flowPad.Parent = flowFrame
+
+local flowLabel = Instance.new("TextLabel")
+flowLabel.Size = UDim2.new(1, 0, 1, 0)
+flowLabel.BackgroundTransparency = 1
+flowLabel.Text = "Workflow: Prompt -> Backend Response -> Preview -> Apply"
+flowLabel.TextColor3 = C.white
+flowLabel.Font = Enum.Font.GothamMedium
+flowLabel.TextSize = 12
+flowLabel.TextXAlignment = Enum.TextXAlignment.Left
+flowLabel.Parent = flowFrame
+
+local connectionCard = makeCard(2)
+makeLabel("Connection", 1, 18, C.white, true, false, connectionCard, Enum.Font.GothamBold, 14)
+makeLabel(
+    "Set the backend endpoint used by the plugin to request AI-generated Studio changes.",
+    2, 32, C.subtext, false, true, connectionCard, Enum.Font.Gotham, 12
+)
+makeLabel("Backend Endpoint", 3, 16, C.muted, true, false, connectionCard, Enum.Font.GothamMedium, 12)
+
 local urlBox = Instance.new("TextBox")
-urlBox.Size             = UDim2.new(1, 0, 0, 28)
+urlBox.Size             = UDim2.new(1, 0, 0, 36)
 urlBox.BackgroundColor3 = C.input
 urlBox.TextColor3       = C.white
 urlBox.PlaceholderText  = "https://your-backend.up.railway.app"
 urlBox.Text             = BACKEND_URL
 urlBox.TextWrapped      = false
 urlBox.ClearTextOnFocus = false
-urlBox.Font             = Enum.Font.SourceSans
+urlBox.Font             = Enum.Font.Gotham
 urlBox.TextSize         = 13
-urlBox.LayoutOrder      = 5
-urlBox.Parent           = root
-local urlCorner = Instance.new("UICorner"); urlCorner.CornerRadius = UDim.new(0,5); urlCorner.Parent = urlBox
-local urlPad = Instance.new("UIPadding"); urlPad.PaddingLeft = UDim.new(0,5); urlPad.Parent = urlBox
+urlBox.TextXAlignment   = Enum.TextXAlignment.Left
+urlBox.LayoutOrder      = 4
+urlBox.Parent           = connectionCard
+applyCorner(urlBox, 8)
+applyStroke(urlBox, C.border, 1, 0.4)
+local urlPad = Instance.new("UIPadding")
+urlPad.PaddingLeft = UDim.new(0, 10)
+urlPad.PaddingRight = UDim.new(0, 10)
+urlPad.Parent = urlBox
 
-local saveUrlBtn = makeButton("💾  Save URL", 6, C.accentDim, 28)
+local saveUrlBtn = makeButton("Save Endpoint", 5, C.accentDim, 34, connectionCard)
+makeLabel("Endpoint used by the plugin: POST /generate", 6, 16, C.subtext, false, false, connectionCard, Enum.Font.Gotham, 11)
 
-makeDivider(7)
+local buildCard = makeCard(3)
+makeLabel("Build Request", 1, 18, C.white, true, false, buildCard, Enum.Font.GothamBold, 14)
+makeLabel(
+    "Describe the script, object, layout, or game mode you want previewed before applying.",
+    2, 32, C.subtext, false, true, buildCard, Enum.Font.Gotham, 12
+)
 
--- Section 3: Selection context
-local selLabel = makeLabel("📌  No selection", 8, 18, C.subtext)
+local selectionFrame = Instance.new("Frame")
+selectionFrame.Size = UDim2.new(1, 0, 0, 28)
+selectionFrame.BackgroundColor3 = C.surfaceAlt
+selectionFrame.BorderSizePixel = 0
+selectionFrame.LayoutOrder = 3
+selectionFrame.Parent = buildCard
+applyCorner(selectionFrame, 8)
+applyStroke(selectionFrame, C.border, 1, 0.5)
 
--- Section 4: Prompt input
-makeLabel("Describe what you want to build:", 9, 20, C.white, true)
-makeLabel("Try: 'Create a round-based game with 60s timer and 2 teams'", 10, 17, C.subtext)
+local selPad = Instance.new("UIPadding")
+selPad.PaddingLeft = UDim.new(0, 10)
+selPad.PaddingRight = UDim.new(0, 10)
+selPad.Parent = selectionFrame
+
+local selLabel = Instance.new("TextLabel")
+selLabel.Size = UDim2.new(1, 0, 1, 0)
+selLabel.BackgroundTransparency = 1
+selLabel.Text = "Selection: No selection"
+selLabel.TextColor3 = C.subtext
+selLabel.Font = Enum.Font.GothamMedium
+selLabel.TextSize = 12
+selLabel.TextXAlignment = Enum.TextXAlignment.Left
+selLabel.Parent = selectionFrame
+
+makeLabel("Prompt", 4, 16, C.muted, true, false, buildCard, Enum.Font.GothamMedium, 12)
+makeLabel("Example: Create a round-based game with a timer, teams, and a spawn system", 5, 16, C.subtext, false, false, buildCard, Enum.Font.Gotham, 11)
 
 local promptBox = Instance.new("TextBox")
-promptBox.Size             = UDim2.new(1, 0, 0, 90)
+promptBox.Size             = UDim2.new(1, 0, 0, 112)
 promptBox.BackgroundColor3 = C.input
 promptBox.TextColor3       = C.white
-promptBox.PlaceholderText  = 'e.g. "Add a leaderboard with kills and deaths"'
+promptBox.PlaceholderText  = 'Describe what to build, for example: "Add a leaderboard with kills and deaths"'
 promptBox.TextWrapped      = true
 promptBox.ClearTextOnFocus = false
 promptBox.MultiLine        = true
 promptBox.TextYAlignment   = Enum.TextYAlignment.Top
-promptBox.Font             = Enum.Font.SourceSans
+promptBox.TextXAlignment   = Enum.TextXAlignment.Left
+promptBox.Font             = Enum.Font.Gotham
 promptBox.TextSize         = 14
-promptBox.LayoutOrder      = 11
-promptBox.Parent           = root
-local pCorner = Instance.new("UICorner"); pCorner.CornerRadius = UDim.new(0,5); pCorner.Parent = promptBox
-local pPad = Instance.new("UIPadding"); pPad.PaddingLeft = UDim.new(0,6); pPad.PaddingTop = UDim.new(0,6); pPad.Parent = promptBox
+promptBox.LayoutOrder      = 6
+promptBox.Parent           = buildCard
+applyCorner(promptBox, 8)
+applyStroke(promptBox, C.border, 1, 0.4)
+local pPad = Instance.new("UIPadding")
+pPad.PaddingLeft = UDim.new(0, 10)
+pPad.PaddingRight = UDim.new(0, 10)
+pPad.PaddingTop = UDim.new(0, 10)
+pPad.PaddingBottom = UDim.new(0, 10)
+pPad.Parent = promptBox
 
-local generateBtn = makeButton("⚡  Generate & Apply", 12, C.accent, 40)
+local generateBtn = makeButton("Generate Preview", 7, C.accent, 40, buildCard)
 
--- Section 5: Status bar
+local resultsCard = makeCard(4)
+makeLabel("Preview & Output", 1, 18, C.white, true, false, resultsCard, Enum.Font.GothamBold, 14)
+makeLabel(
+    "Review the backend response, inspect the preview, then apply the result into Studio when ready.",
+    2, 32, C.subtext, false, true, resultsCard, Enum.Font.Gotham, 12
+)
+
 local statusFrame = Instance.new("Frame")
-statusFrame.Size             = UDim2.new(1, 0, 0, 26)
-statusFrame.BackgroundColor3 = C.surface
+statusFrame.Size             = UDim2.new(1, 0, 0, 32)
+statusFrame.BackgroundColor3 = C.surfaceAlt
 statusFrame.BorderSizePixel  = 0
-statusFrame.LayoutOrder      = 13
-statusFrame.Parent           = root
-local sfCorner = Instance.new("UICorner"); sfCorner.CornerRadius = UDim.new(0,5); sfCorner.Parent = statusFrame
+statusFrame.LayoutOrder      = 3
+statusFrame.Parent           = resultsCard
+applyCorner(statusFrame, 8)
+applyStroke(statusFrame, C.border, 1, 0.45)
+
 local statusLbl = Instance.new("TextLabel")
-statusLbl.Size              = UDim2.new(1,-8,1,0)
-statusLbl.Position          = UDim2.new(0,4,0,0)
+statusLbl.Size              = UDim2.new(1, -20, 1, 0)
+statusLbl.Position          = UDim2.new(0, 10, 0, 0)
 statusLbl.BackgroundTransparency = 1
 statusLbl.TextColor3        = C.subtext
-statusLbl.Text              = "Ready — enter a prompt above"
+statusLbl.Text              = "Ready. Enter a prompt to begin."
 statusLbl.TextWrapped       = true
 statusLbl.TextTruncate      = Enum.TextTruncate.AtEnd
-statusLbl.Font              = Enum.Font.SourceSans
-statusLbl.TextSize          = 13
+statusLbl.Font              = Enum.Font.GothamMedium
+statusLbl.TextSize          = 12
 statusLbl.TextXAlignment    = Enum.TextXAlignment.Left
 statusLbl.Parent            = statusFrame
 
--- Section 6: Info boxes
-local explainBox  = makeInfoBox(14, Color3.fromRGB(35,58,35), C.green)   -- success
-local errorBox    = makeInfoBox(15, Color3.fromRGB(58,30,30), C.red)      -- error
-local warningBox  = makeInfoBox(16, Color3.fromRGB(58,50,25), C.orange)   -- warnings
-
--- Section 7: Phase progress [G2]
-makeDivider(17)
-local phaseLabel = makeLabel("", 18, 18, C.subtext)
-local continueBtn = makeButton("▶  Continue to Next Phase", 19, C.accentDim, 32)
+local previewBox  = makeInfoBox(4, C.accentSoft, C.white, resultsCard)
+local explainBox  = makeInfoBox(5, C.greenSoft, C.green, resultsCard)
+local errorBox    = makeInfoBox(6, C.redSoft, C.red, resultsCard)
+local warningBox  = makeInfoBox(7, C.orangeSoft, C.orange, resultsCard)
+local phaseLabel  = makeLabel("", 8, 18, C.subtext, false, true, resultsCard, Enum.Font.GothamMedium, 12)
+local applyBtn    = makeButton("Apply Preview to Studio", 9, C.accentDim, 36, resultsCard)
+local continueBtn = makeButton("Continue Next Phase", 10, C.accentDim, 34, resultsCard)
+applyBtn.Active = false
+applyBtn.AutoButtonColor = false
+applyBtn.TextColor3 = C.subtext
 continueBtn.Visible = false
 
--- Section 8: Actions
-makeDivider(20)
-makeLabel("Actions", 21, 18, C.subtext, true)
-local undoBtn  = makeButton("↩  Undo Last Generation", 22, C.danger,  32)
-local clearBtn = makeButton("🗑  Clear Conversation",  23, Color3.fromRGB(65,65,65), 32)
+local actionsCard = makeCard(5)
+makeLabel("Session Controls", 1, 18, C.white, true, false, actionsCard, Enum.Font.GothamBold, 14)
+makeLabel(
+    "Undo the last applied generation or reset the current conversation before a new request.",
+    2, 32, C.subtext, false, true, actionsCard, Enum.Font.Gotham, 12
+)
+local undoBtn  = makeButton("Undo Last Generation", 3, C.danger, 34, actionsCard)
+local clearBtn = makeButton("Clear Conversation", 4, C.surfaceAlt, 34, actionsCard)
 
 -- ── Status helpers ────────────────────────────────────────────
 local function setStatus(msg, color)
@@ -296,13 +426,91 @@ local function setStatus(msg, color)
     statusLbl.Text = tostring(msg):sub(1, 150)
 end
 
+local pendingPreview = nil
+
+local function setApplyReady(ready)
+    applyBtn.Active = ready
+    applyBtn.AutoButtonColor = ready
+    applyBtn.BackgroundColor3 = ready and C.accent or C.accentDim
+    applyBtn.TextColor3 = ready and C.white or C.subtext
+end
+
+local function getCurrentTargetParent()
+    local sel = Selection:Get()
+    if #sel == 1 and sel[1] then
+        return sel[1]
+    end
+    return game.Workspace
+end
+
+local function getTargetLabel(target)
+    if not target or target == game.Workspace then
+        return "Workspace"
+    end
+    local ok, fullName = pcall(function()
+        return target:GetFullName()
+    end)
+    return ok and fullName or target.Name or "Workspace"
+end
+
+local function buildPreviewSummary(data, targetParent)
+    local instanceCount = type(data.instances) == "table" and #data.instances or 0
+    local scriptCount   = type(data.scripts) == "table" and #data.scripts or 0
+    local lines = {
+        string.format(
+            "Preview ready for %s: %d instance(s), %d script(s).",
+            getTargetLabel(targetParent),
+            instanceCount,
+            scriptCount
+        )
+    }
+
+    if instanceCount > 0 then
+        lines[#lines + 1] = "Objects:"
+        for i = 1, math.min(instanceCount, 5) do
+            local instData = data.instances[i]
+            local name = instData.properties and instData.properties.Name or instData.className
+            lines[#lines + 1] = string.format("• %s (%s)", tostring(name), tostring(instData.className))
+        end
+        if instanceCount > 5 then
+            lines[#lines + 1] = string.format("• ...and %d more object(s)", instanceCount - 5)
+        end
+    end
+
+    if scriptCount > 0 then
+        lines[#lines + 1] = "Scripts:"
+        for i = 1, math.min(scriptCount, 4) do
+            local scriptData = data.scripts[i]
+            lines[#lines + 1] = string.format(
+                "• %s -> %s",
+                tostring(scriptData.name or scriptData.type or "Script"),
+                tostring(scriptData.parent or "Workspace")
+            )
+        end
+        if scriptCount > 4 then
+            lines[#lines + 1] = string.format("• ...and %d more script(s)", scriptCount - 4)
+        end
+    end
+
+    if data.currentPhase and data.totalPhases and data.totalPhases > 1 then
+        lines[#lines + 1] = string.format("Phase preview: %d of %d", data.currentPhase, data.totalPhases)
+    end
+
+    return table.concat(lines, "\n")
+end
+
+local function showPreview(text)
+    previewBox.Text = tostring(text or "")
+    previewBox.Visible = text ~= nil and text ~= ""
+end
+
 local function showExplain(text)
-    explainBox.Text    = "✔  " .. tostring(text)
+    explainBox.Text    = "Backend response: " .. tostring(text)
     explainBox.Visible = text ~= nil and text ~= ""
 end
 
 local function showError(msg, detail, suggestion)
-    local parts = { "✖  " .. tostring(msg) }
+    local parts = { "Error: " .. tostring(msg) }
     if detail     then parts[#parts+1] = "Detail: "     .. tostring(detail)     end
     if suggestion then parts[#parts+1] = "Suggestion: " .. tostring(suggestion) end
     errorBox.Text    = table.concat(parts, "\n")
@@ -314,7 +522,7 @@ local function showWarnings(warnings)
         warningBox.Visible = false
         return
     end
-    local lines = { "⚠  Cross-reference warnings:" }
+    local lines = { "Warnings:" }
     for _, w in ipairs(warnings) do
         lines[#lines+1] = "• " .. w
     end
@@ -323,6 +531,7 @@ local function showWarnings(warnings)
 end
 
 local function clearInfoBoxes()
+    previewBox.Visible  = false
     explainBox.Visible  = false
     errorBox.Visible    = false
     warningBox.Visible  = false
@@ -331,7 +540,12 @@ end
 local function setBusy(busy)
     generateBtn.Active           = not busy
     generateBtn.BackgroundColor3 = busy and C.accentDim or C.accent
-    generateBtn.Text             = busy and "⏳  Generating…" or "⚡  Generate & Apply"
+    generateBtn.Text             = busy and "Generating Preview..." or "Generate Preview"
+    if busy then
+        setApplyReady(false)
+    elseif pendingPreview then
+        setApplyReady(true)
+    end
 end
 
 -- Track next-phase prompt for the continue button
@@ -341,11 +555,11 @@ local nextPhasePrompt = nil
 local function updateSelLabel()
     local sel = Selection:Get()
     if #sel == 0 then
-        selLabel.Text = "📌  No selection"
+        selLabel.Text = "Selection: No selection"
     elseif #sel == 1 then
-        selLabel.Text = "📌  " .. sel[1].Name .. " (" .. sel[1].ClassName .. ")"
+        selLabel.Text = "Selection: " .. sel[1].Name .. " (" .. sel[1].ClassName .. ")"
     else
-        selLabel.Text = "📌  " .. #sel .. " objects selected"
+        selLabel.Text = "Selection: " .. #sel .. " objects selected"
     end
 end
 Selection.SelectionChanged:Connect(updateSelLabel)
@@ -451,8 +665,21 @@ end
 -- ── applyChanges ──────────────────────────────────────────────
 -- `continue` is intentionally avoided for compatibility.
 -- All loop bodies use if/else guards instead.
-local function applyChanges(data)
+local function applyChanges(data, targetParent)
     local createdThisTurn = {}
+    local createParent = (targetParent and targetParent.Parent) and targetParent or game.Workspace
+    local createdByName = {}
+    local instanceEntries = {}
+
+    local function resolveInstanceParent(parentName)
+        if type(parentName) ~= "string" or parentName == "" or parentName == "Selection" then
+            return createParent
+        end
+        if parentName == "Workspace" then
+            return game.Workspace
+        end
+        return createdByName[parentName] or createParent
+    end
 
     -- Create instances
     if type(data.instances) == "table" then
@@ -469,13 +696,21 @@ local function applyChanges(data)
                         tryApplyProperty(newInst, prop, value)
                     end
                 end
-
-                -- Parent to single selected object if applicable, else Workspace
-                local sel = Selection:Get()
-                newInst.Parent = (#sel == 1) and sel[1] or game.Workspace
+                local instName = newInst.Name
+                if instName and instName ~= "" and not createdByName[instName] then
+                    createdByName[instName] = newInst
+                end
+                table.insert(instanceEntries, {
+                    inst = newInst,
+                    parent = instData.parent,
+                })
                 table.insert(createdThisTurn, newInst)
             end
         end
+    end
+
+    for _, entry in ipairs(instanceEntries) do
+        entry.inst.Parent = resolveInstanceParent(entry.parent)
     end
 
     -- Create scripts
@@ -533,27 +768,51 @@ local function updatePhaseUI(data)
         return
     end
 
-    phaseLabel.Text = string.format("Phase %d of %d  [%s task]", current, total, complexity)
+    phaseLabel.Text = string.format("Phase %d of %d • %s task", current, total, complexity)
 
     if current < total then
         local nextPhaseDesc = phases[current + 1] or ("Phase " .. (current + 1))
         nextPhasePrompt = "continue"
-        continueBtn.Text    = "▶  Continue: " .. nextPhaseDesc:sub(1, 40)
+        continueBtn.Text    = "Continue: " .. nextPhaseDesc:sub(1, 40)
         continueBtn.Visible = true
     else
         continueBtn.Visible = false
         nextPhasePrompt     = nil
-        phaseLabel.Text     = phaseLabel.Text .. "  ✔ Complete"
+        phaseLabel.Text     = phaseLabel.Text .. " • Complete"
     end
 end
 
 -- ── Core generate function ────────────────────────────────────
+local function applyPendingPreview()
+    if not pendingPreview then
+        setStatus("No preview is ready to apply.", C.subtext)
+        return
+    end
+
+    local preview = pendingPreview
+    local count = applyChanges(preview.data, preview.targetParent)
+    setStatus(string.format("Applied %d change(s) from preview.", count), C.green)
+    showPreview(buildPreviewSummary(preview.data, preview.targetParent) .. "\nStatus: Applied to Studio.")
+    showExplain(preview.data.explanation or "Done")
+    showWarnings(preview.data.warnings)
+    promptBox.Text = ""
+
+    pendingPreview = nil
+    setApplyReady(false)
+
+    if nextPhasePrompt then
+        continueBtn.Visible = true
+    end
+end
+
 local function doGenerate(promptText)
     if not promptText or promptText:match("^%s*$") then return end
 
+    pendingPreview = nil
     setBusy(true)
     clearInfoBoxes()
-    setStatus("Generating…")
+    setStatus("Submitting generation request...")
+    setApplyReady(false)
     continueBtn.Visible = false
 
     -- Build full prompt with selection context
@@ -561,6 +820,7 @@ local function doGenerate(promptText)
     local fullPrompt = ctx
         and (ctx .. "\n\nRequest: " .. promptText:sub(1, 3800))
         or  promptText:sub(1, 4000)
+    local targetParent = getCurrentTargetParent()
 
     local ok, result = pcall(function()
         return HttpService:PostAsync(
@@ -583,25 +843,39 @@ local function doGenerate(promptText)
                 -- [B2] Structured error from server
                 local detail     = data.details and data.details.message or nil
                 local suggestion = data.suggestion or nil
-                setStatus("Error: " .. tostring(data.error), C.red)
+                setStatus("Request returned an error.", C.red)
                 showError(data.error, detail, suggestion)
             else
-                local count = applyChanges(data)
                 local explanation = data.explanation or "Done"
-                setStatus(string.format("✔  Applied %d object(s)", count), C.green)
+                local hasInstances = type(data.instances) == "table" and #data.instances > 0
+                local hasScripts   = type(data.scripts) == "table" and #data.scripts > 0
+                local canApply     = hasInstances or hasScripts
+
+                if canApply then
+                    pendingPreview = {
+                        data = data,
+                        targetParent = targetParent,
+                    }
+                    showPreview(buildPreviewSummary(data, targetParent))
+                    setApplyReady(true)
+                    setStatus("Preview ready. Review the backend response, then apply.", C.green)
+                else
+                    setStatus("Backend response contained no changes to apply.", C.subtext)
+                end
+
                 showExplain(explanation)
                 showWarnings(data.warnings)
                 updatePhaseUI(data)
-                promptBox.Text = ""
+                continueBtn.Visible = false
             end
         else
-            setStatus("Error: Server response unreadable", C.red)
+            setStatus("Server response could not be read.", C.red)
             showError("Server returned unreadable data.", nil, "Try again. If it persists, check server logs.")
         end
     else
         -- HTTP-level failure
         local msg, sug = parseHttpError(result)
-        setStatus("Error: " .. msg, C.red)
+        setStatus("Request could not be completed.", C.red)
         showError(msg, nil, sug)
         warn("[AI Plugin] HTTP error: " .. tostring(result))
     end
@@ -612,6 +886,10 @@ end
 -- ── Generate button ───────────────────────────────────────────
 generateBtn.MouseButton1Click:Connect(function()
     doGenerate(promptBox.Text)
+end)
+
+applyBtn.MouseButton1Click:Connect(function()
+    applyPendingPreview()
 end)
 
 -- ── Continue button (next phase) [G2] ────────────────────────
@@ -627,7 +905,7 @@ saveUrlBtn.MouseButton1Click:Connect(function()
     if newUrl and newUrl ~= "" then
         BACKEND_URL = newUrl
         saveBackendURL(newUrl)
-        setStatus("Backend URL saved: " .. newUrl:sub(1, 50), C.green)
+        setStatus("Endpoint saved: " .. newUrl:sub(1, 50), C.green)
     else
         setStatus("URL cannot be empty.", C.red)
     end
@@ -636,7 +914,7 @@ end)
 -- ── Undo button ───────────────────────────────────────────────
 undoBtn.MouseButton1Click:Connect(function()
     if #undoStack == 0 then
-        setStatus("Nothing to undo.", C.subtext)
+        setStatus("Nothing to undo yet.", C.subtext)
         return
     end
     local batch = table.remove(undoStack)
@@ -647,7 +925,7 @@ undoBtn.MouseButton1Click:Connect(function()
             count += 1
         end
     end
-    setStatus(string.format("Undone: %d object(s) removed.", count), C.subtext)
+    setStatus(string.format("Removed %d item(s) from the last generation.", count), C.subtext)
     clearInfoBoxes()
     continueBtn.Visible = false
 end)
@@ -656,12 +934,14 @@ end)
 clearBtn.MouseButton1Click:Connect(function()
     conversationId      = HttpService:GenerateGUID(false)
     undoStack           = {}
+    pendingPreview      = nil
     promptBox.Text      = ""
     nextPhasePrompt     = nil
+    setApplyReady(false)
     continueBtn.Visible = false
     phaseLabel.Text     = ""
     clearInfoBoxes()
-    setStatus("Conversation cleared — new session started.", C.subtext)
+    setStatus("Conversation cleared. A new session is ready.", C.subtext)
 end)
 
 -- ── Toolbar toggle ────────────────────────────────────────────

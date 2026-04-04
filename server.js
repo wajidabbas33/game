@@ -80,7 +80,7 @@ const PROVIDER_CONFIG = {
         displayName: 'Qwen',
         keyName: 'QWEN_API_KEY',
         apiKey: process.env.QWEN_API_KEY,
-        model: process.env.QWEN_MODEL || 'qwen3.5-plus',
+        model: process.env.QWEN_MODEL || 'qwen3.6-plus',
         baseURL: process.env.QWEN_BASE_URL || 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
         temperature: 0.7,
         maxTokenField: 'max_tokens',
@@ -179,7 +179,15 @@ Return ONLY a single valid JSON object. No prose, no markdown, no code fences.
 
   "instances": [
     {
+      "className": "Model",
+      "parent":    "Workspace",
+      "properties": {
+        "Name":      "Arena"
+      }
+    },
+    {
       "className": "Part",
+      "parent":    "Arena",
       "properties": {
         "Name":      "KillBrick",
         "Size":      [4, 1, 4],
@@ -220,7 +228,8 @@ TASK COMPLEXITY RULES
 ════════════════════════════════════════════════════════════
 "simple"   – 1 script or 1-2 instances. Complete in one response.
 "moderate" – 2-4 scripts, some instances. Complete in one response.
-"complex"  – 5+ scripts, multiple systems, cross-script dependencies.
+"complex"  – 5+ scripts, nested map structures, multiple systems,
+             cross-script dependencies, or combined map + gameplay requests.
              MUST use phases. Return phase 1 only. Include "phases"
              array listing ALL phases so the user knows what's coming.
              End explanation with: "Reply 'continue' for phase 2."
@@ -286,6 +295,75 @@ Required:
   • LocalScript switches Camera to Scriptable mode
   • Cycles through living players every 5 seconds
 
+── CAPTURE THE FLAG ───────────────────────────────────────
+Required scripts:
+  • FlagManager (Script → ServerScriptService)
+    - Creates or manages RedFlag and BlueFlag objectives
+    - Tracks flag pickup, drop, return, and capture states
+    - Awards team score on successful capture
+  • FlagUI (LocalScript → StarterPlayerScripts)
+    - Shows flag status and team score
+
+── KING OF THE HILL ───────────────────────────────────────
+Required scripts:
+  • HillManager (Script → ServerScriptService)
+    - Tracks players inside a hill zone
+    - Awards score over time to the controlling team
+    - Resets control when hill is empty or contested
+  • HillUI (LocalScript → StarterPlayerScripts)
+    - Shows current owner and control progress
+
+── SURVIVAL WAVES ─────────────────────────────────────────
+Required scripts:
+  • WaveManager (Script → ServerScriptService)
+    - Tracks wave number, alive enemies, and intermission
+    - Starts the next wave only after current enemies are cleared
+    - Scales difficulty gradually per wave
+  • WaveUI (LocalScript → StarterPlayerScripts)
+    - Shows wave number, remaining enemies, and countdowns
+
+════════════════════════════════════════════════════════════
+MAP / LAYOUT GENERATION RULES
+════════════════════════════════════════════════════════════
+When the user asks for a map, terrain, room, arena, classroom, base,
+or architecture, generate structured Roblox instances, not only scripts.
+
+For map generation:
+  • Create major containers first using Model instances with unique Name values.
+  • Use floor, walls, platforms, landmarks, spawn areas, and cover pieces.
+  • Prefer fewer larger structural parts over many tiny decorative parts.
+  • Use Anchored = true for environment pieces unless movement is required.
+  • Give gameplay-critical objects clear names: RedSpawn, BlueSpawn, HillZone, FlagBase, LobbySpawn.
+  • If scripts will reference an object, that object MUST be named and generated in the same response.
+
+Optional instance parenting:
+  • instances[].parent may be:
+      - "Workspace"  → parent directly to Workspace
+      - "Selection"  → parent to the currently selected Studio object
+      - "<Name>"     → parent to another generated instance with that Name
+  • Use this to build nested layouts such as Model -> Parts.
+
+Recommended map patterns:
+  • Arena map → Arena model, floor, boundary walls, center objective/platform, team spawns
+  • Lobby map → Lobby model, waiting area, signage area, spawn point, teleport path
+  • Classroom/interior → container model, floor, 4 walls, ceiling, windows, front board, desk rows
+
+════════════════════════════════════════════════════════════
+ADVANCED LOGIC + OPTIMIZATION
+════════════════════════════════════════════════════════════
+1. Prefer server-authoritative logic for rounds, scoring, captures, and wave state.
+2. Cache services and commonly used instances at the top of each script.
+3. Avoid tight infinite loops; use task.wait with sensible intervals.
+4. Use ModuleScripts for shared logic when systems are large or reused.
+5. Reuse or check for existing RemoteEvents, Folders, and values with FindFirstChild before creating duplicates.
+6. Clean up event connections, temporary state, and player tables when players leave or rounds end.
+7. Keep map part counts reasonable and use symmetrical layouts when the user asks for competitive maps.
+8. When asked for map + systems together, prefer phases:
+     Phase 1: Create the map shell / architecture
+     Phase 2: Add gameplay systems and scripts
+     Phase 3: Add UI, polish, or optional extras
+9. Produce working, maintainable Luau rather than clever but fragile code.
+
 ════════════════════════════════════════════════════════════
 STRICT RULES
 ════════════════════════════════════════════════════════════
@@ -301,7 +379,9 @@ STRICT RULES
 7.  If the user's message references a previous turn ("make it blue",
     "add a timer to that"), use the conversation context.
 8.  For complex requests, ALWAYS use phases. Never try to generate
-    10 scripts in one response — quality drops significantly.`;
+    10 scripts in one response — quality drops significantly.
+9.  If you generate nested maps, use instances[].parent to keep
+    the hierarchy organized and predictable.`;
 
 // ── [B1] JSON structure validator ────────────────────────────
 // Validates the AI response matches expected schema.
@@ -342,6 +422,9 @@ function validateResponseStructure(data) {
             data.instances.forEach((inst, i) => {
                 if (!inst.className || typeof inst.className !== 'string')  errors.push(`instances[${i}].className must be a string`);
                 if (!inst.properties || typeof inst.properties !== 'object') errors.push(`instances[${i}].properties must be an object`);
+                if (inst.parent !== undefined && typeof inst.parent !== 'string') {
+                    errors.push(`instances[${i}].parent must be a string when provided`);
+                }
             });
         }
     }
@@ -571,7 +654,14 @@ app.post('/generate', apiLimiter, async (req, res) => {
                             props[k] = v;
                         }
                     }
-                    return { className: i.className.slice(0, 64), properties: props };
+                    const safeInst = {
+                        className: i.className.slice(0, 64),
+                        properties: props,
+                    };
+                    if (typeof i.parent === 'string' && i.parent.trim() !== '') {
+                        safeInst.parent = i.parent.trim().slice(0, 128);
+                    }
+                    return safeInst;
                 });
         }
 

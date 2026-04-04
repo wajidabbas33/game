@@ -136,8 +136,26 @@ async function runTests() {
         assert(false, `Game mode generation failed: ${e.message}`);
     }
 
-    // Test 5: JSON Structure Validation
-    console.log('\n📋 Test 5: Response Structure Validation');
+    // Test 5: Combined Map + System Generation
+    console.log('\n📋 Test 5: Dynamic Map + System Generation');
+    try {
+        const res = await makeRequest('POST', '/generate', {
+            prompt: 'Create a capture the flag arena with two bases, flag stands, team spawns, and the core server scripts',
+            conversationId: 'test-map-system-' + Date.now()
+        });
+        assert(res.status === 200, 'Returns 200 for map + system request');
+        assert(res.body.instances && res.body.instances.length > 0, 'Generated map/layout instances');
+        assert(res.body.scripts && res.body.scripts.length > 0, 'Generated gameplay scripts');
+        assert(res.body.complexity, 'Has complexity assessment for combined request');
+        console.log(`  📝 Explanation: ${res.body.explanation}`);
+        console.log(`  🧱 Instances generated: ${res.body.instances ? res.body.instances.length : 0}`);
+        console.log(`  📜 Scripts generated: ${res.body.scripts ? res.body.scripts.length : 0}`);
+    } catch (e) {
+        assert(false, `Dynamic map + system generation failed: ${e.message}`);
+    }
+
+    // Test 6: JSON Structure Validation
+    console.log('\n📋 Test 6: Response Structure Validation');
     try {
         const res = await makeRequest('POST', '/generate', {
             prompt: 'Create a simple part',
@@ -172,8 +190,8 @@ async function runTests() {
         assert(false, `Structure validation test failed: ${e.message}`);
     }
 
-    // Test 6: Conversation Context
-    console.log('\n📋 Test 6: Conversation Context Preservation');
+    // Test 7: Conversation Context
+    console.log('\n📋 Test 7: Conversation Context Preservation');
     try {
         const convId = 'test-context-' + Date.now();
         
@@ -197,8 +215,8 @@ async function runTests() {
         assert(false, `Context preservation test failed: ${e.message}`);
     }
 
-    // Test 7: Cross-Reference Validation
-    console.log('\n📋 Test 7: Cross-Reference Validation');
+    // Test 8: Cross-Reference Validation
+    console.log('\n📋 Test 8: Cross-Reference Validation');
     try {
         const res = await makeRequest('POST', '/generate', {
             prompt: 'Create a script that references workspace.MyPart but dont create MyPart',
@@ -215,8 +233,8 @@ async function runTests() {
         assert(false, `Cross-reference test failed: ${e.message}`);
     }
 
-    // Test 8: Error Handling (Invalid Conversation ID)
-    console.log('\n📋 Test 8: Error Handling');
+    // Test 9: Error Handling (Invalid Conversation ID)
+    console.log('\n📋 Test 9: Error Handling');
     try {
         const res = await makeRequest('POST', '/generate', {
             prompt: 'Create a part'
@@ -229,8 +247,8 @@ async function runTests() {
         assert(false, `Error handling test failed: ${e.message}`);
     }
 
-    // Test 9: Rate Limiting (IP-based)
-    console.log('\n📋 Test 9: Rate Limiting (IP-based protection)');
+    // Test 10: Rate Limiting (IP-based)
+    console.log('\n📋 Test 10: Rate Limiting (IP-based protection)');
     try {
         const convId = 'test-ratelimit-' + Date.now();
         let rateLimited = false;
