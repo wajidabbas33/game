@@ -698,41 +698,65 @@ function isContinuePrompt(prompt) {
         || normalized.startsWith('continue ');
 }
 
+function isContextualFollowUpPrompt(prompt, session) {
+    if (!session || !session.lastResponse) {
+        return false;
+    }
+
+    const text = String(prompt || '').trim().toLowerCase();
+    if (text === '') {
+        return false;
+    }
+
+    const followUpVerb = /^(add|also|then|next|make|update|change|refine|improve|polish|include|give)\b/.test(text);
+    const referencesExistingState = /\b(it|that|those|them|existing|current|previous|same)\b/.test(text);
+    const featureFollowUp = /\b(ui|hud|timer|scoreboard|leaderboard|spawn protection|polish|effects|vfx|sfx|music|audio)\b/.test(text);
+
+    return text.length <= 220 && (
+        followUpVerb
+        || (referencesExistingState && featureFollowUp)
+        || featureFollowUp
+    );
+}
+
 function looksComplexPrompt(prompt) {
     const text = String(prompt || '').toLowerCase();
     const buildKeywords = [
         'capture the flag', 'king of the hill', 'round', 'lobby',
         'team', 'spawn', 'leaderboard', 'datastore', 'ui',
-        'wave', 'arena', 'base', 'flag', 'score',
+        'wave', 'arena', 'base', 'flag', 'score', 'timer',
+        'polish', 'hud',
     ];
 
     return text.length > 160 || countKeywordHits(text, buildKeywords) >= 4;
 }
 
-function shouldUseFastSystemPrompt(prompt) {
-    return isContinuePrompt(prompt) || !looksComplexPrompt(prompt);
+function shouldUseFastSystemPrompt(prompt, session) {
+    return isContinuePrompt(prompt)
+        || isContextualFollowUpPrompt(prompt, session)
+        || !looksComplexPrompt(prompt);
 }
 
-function estimateMaxTokens(prompt) {
+function estimateMaxTokens(prompt, session) {
     const text = String(prompt || '').toLowerCase();
 
-    if (isContinuePrompt(text)) {
-        return 800;
+    if (isContinuePrompt(text) || isContextualFollowUpPrompt(prompt, session)) {
+        return 1400;
     }
 
     if (looksComplexPrompt(text)) {
-        return 1000;
+        return 1200;
     }
 
     if (text.length < 100) {
-        return 500;
+        return 700;
     }
 
-    return 700;
+    return 900;
 }
 
 function buildPerformanceSystemMessage(prompt, session) {
-    if (isContinuePrompt(prompt) && session.lastResponse) {
+    if (session.lastResponse && (isContinuePrompt(prompt) || isContextualFollowUpPrompt(prompt, session))) {
         const nextPhaseNumber = Math.min(
             (session.lastResponse.currentPhase || 1) + 1,
             session.lastResponse.totalPhases || 1
@@ -740,12 +764,17 @@ function buildPerformanceSystemMessage(prompt, session) {
         const nextPhaseLabel = session.lastResponse.phases?.[nextPhaseNumber - 1]
             || `Phase ${nextPhaseNumber}`;
 
+        const modeLine = isContinuePrompt(prompt)
+            ? `Return only ${nextPhaseLabel}.`
+            : `Treat this as a follow-up modification request. Prefer ${nextPhaseLabel} if more phased work remains.`;
+
         return [
-            'Latency-critical continuation mode.',
-            `Return only ${nextPhaseLabel}.`,
+            'Latency-critical follow-up mode.',
+            modeLine,
             'Do not repeat previous phases or regenerate the map shell.',
             'Reuse already-generated instance names whenever possible.',
-            'Keep the response compact: at most 8 instances and 2 scripts unless strictly necessary.',
+            'Return only the new or updated assets needed for this follow-up.',
+            'Keep the response compact: at most 8 instances and 3 scripts unless strictly necessary.',
         ].join(' ');
     }
 
@@ -814,7 +843,32 @@ function buildLastResponseState(safe) {
 function buildUserMessage(prompt, session) {
     const trimmedPrompt = String(prompt || '').slice(0, 4000);
 
-    if (!isContinuePrompt(trimmedPrompt) || !session.lastResponse) {
+    if (!session.lastResponse) {
+        return trimmedPrompt;
+    }
+
+    if (!isContinuePrompt(trimmedPrompt) && isContextualFollowUpPrompt(trimmedPrompt, session)) {
+        const nextPhaseNumber = Math.min(
+            (session.lastResponse.currentPhase || 1) + 1,
+            session.lastResponse.totalPhases || 1
+        );
+        const nextPhaseLabel = session.lastResponse.phases?.[nextPhaseNumber - 1]
+            || `Phase ${nextPhaseNumber}`;
+        const generatedNames = session.lastResponse.generatedNames?.length
+            ? session.lastResponse.generatedNames.join(', ')
+            : 'none recorded';
+
+        return [
+            'Follow-up request for the existing Roblox Studio build.',
+            `Requested change: ${trimmedPrompt}`,
+            `Current phase state: ${session.lastResponse.currentPhase || 1} of ${session.lastResponse.totalPhases || 1}.`,
+            `If phased work remains, continue with ${nextPhaseLabel} while applying this request.`,
+            `Existing generated instance names: ${generatedNames}.`,
+            'Return only the new or updated assets and scripts needed for this follow-up.',
+        ].join(' ');
+    }
+
+    if (!isContinuePrompt(trimmedPrompt)) {
         return trimmedPrompt;
     }
 
@@ -1365,7 +1419,7 @@ async function repairStructuredResponse({ prompt, rawText, performanceSystemMess
     const repairCompletion = await withTimeout(
         retryWithBackoff(() =>
             aiClient.chat.completions.create(buildCompletionRequest(repairMessages, {
-                maxTokens: Math.min(900, estimateMaxTokens(prompt)),
+                maxTokens: Math.max(900, Math.min(1400, estimateMaxTokens(prompt))),
             }))
         ),
         20_000,
@@ -1458,7 +1512,7 @@ app.post('/generate', apiLimiter, async (req, res) => {
 
     try {
         const performanceSystemMessage = buildPerformanceSystemMessage(prompt, session);
-        const systemPrompt = shouldUseFastSystemPrompt(prompt)
+        const systemPrompt = shouldUseFastSystemPrompt(prompt, session)
             ? FAST_SYSTEM_PROMPT
             : SYSTEM_PROMPT;
         const messages = [
@@ -1483,7 +1537,7 @@ app.post('/generate', apiLimiter, async (req, res) => {
                 completion = await withTimeout(
                     retryWithBackoff(() =>
                         aiClient.chat.completions.create(buildCompletionRequest(messages, {
-                            maxTokens: estimateMaxTokens(prompt),
+                            maxTokens: estimateMaxTokens(prompt, session),
                         }))
                     ),
                     25_000
@@ -1522,7 +1576,10 @@ app.post('/generate', apiLimiter, async (req, res) => {
                             console.warn('Recovered invalid JSON response with deterministic fallback.');
                         } else {
                             session.messages = session.messages.slice(0, historyLengthBeforeTurn);
-                            console.error('AI returned unparseable JSON:\n', rawText.slice(0, 500));
+                            console.error(
+                                `AI returned unparseable JSON (length ${rawText.length}):\n`,
+                                rawText.slice(0, 1500)
+                            );
                             return res.status(502).json({
                                 error: 'AI Response Parse Error',
                                 details: { message: 'The AI returned text that is not valid JSON.' },
