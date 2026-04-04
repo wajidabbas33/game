@@ -701,6 +701,328 @@ function buildUserMessage(prompt, session) {
     ].join(' ');
 }
 
+function sanitizeNumericArray(value, allowedLengths) {
+    if (!Array.isArray(value) || !allowedLengths.includes(value.length)) {
+        return undefined;
+    }
+    if (!value.every(entry => typeof entry === 'number' && Number.isFinite(entry))) {
+        return undefined;
+    }
+    return value.slice();
+}
+
+function sanitizeUDimAxisValue(axis) {
+    if (!axis || typeof axis !== 'object' || Array.isArray(axis)) {
+        return undefined;
+    }
+    const scale = axis.Scale;
+    const offset = axis.Offset;
+    if (typeof scale !== 'number' || !Number.isFinite(scale)) {
+        return undefined;
+    }
+    if (typeof offset !== 'number' || !Number.isFinite(offset)) {
+        return undefined;
+    }
+    return { Scale: scale, Offset: offset };
+}
+
+function sanitizeCFrameValue(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return undefined;
+    }
+
+    const position = sanitizeNumericArray(value.position, [3]);
+    if (!position) {
+        return undefined;
+    }
+
+    const rotation = sanitizeNumericArray(value.rotation, [3]) || [0, 0, 0];
+    return { position, rotation };
+}
+
+function sanitizeUDim2Value(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return undefined;
+    }
+
+    const xAxis = sanitizeUDimAxisValue(value.X);
+    const yAxis = sanitizeUDimAxisValue(value.Y);
+    if (!xAxis || !yAxis) {
+        return undefined;
+    }
+
+    return { X: xAxis, Y: yAxis };
+}
+
+function sanitizePropertyValue(key, value) {
+    if (typeof value === 'string') {
+        return value.slice(0, 500);
+    }
+
+    if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+    }
+
+    if (typeof value === 'boolean') {
+        return value;
+    }
+
+    if (Array.isArray(value)) {
+        return sanitizeNumericArray(value, [3, 12]);
+    }
+
+    if (!value || typeof value !== 'object') {
+        return undefined;
+    }
+
+    if (key === 'CFrame') {
+        return sanitizeCFrameValue(value);
+    }
+
+    return sanitizeUDim2Value(value);
+}
+
+function wantsNoScripts(prompt) {
+    return /\b(?:no|without)\s+scripts?\b/i.test(String(prompt || ''));
+}
+
+function looksLikeMapLayoutPrompt(prompt) {
+    const text = String(prompt || '').toLowerCase();
+    const mapKeywords = [
+        'lobby', 'arena', 'wall', 'walls', 'base', 'bases', 'spawn', 'spawns',
+        'lane', 'flag', 'stands', 'map', 'layout', 'floor', 'architecture',
+    ];
+
+    return countKeywordHits(text, mapKeywords) >= 3;
+}
+
+function buildMapLayoutFallback(prompt) {
+    if (!looksLikeMapLayoutPrompt(prompt)) {
+        return null;
+    }
+
+    const text = String(prompt || '').toLowerCase();
+    const includeLobby = text.includes('lobby');
+    const noScripts = wantsNoScripts(prompt);
+    const phases = noScripts ? [] : [
+        'Phase 1: Create the lobby and arena blockout',
+        'Phase 2: Add gameplay scripts and polish',
+    ];
+    const instances = [];
+
+    if (includeLobby) {
+        instances.push(
+            {
+                className: 'Model',
+                parent: 'Workspace',
+                properties: { Name: 'Lobby' },
+            },
+            {
+                className: 'Part',
+                parent: 'Lobby',
+                properties: {
+                    Name: 'LobbyFloor',
+                    Size: [48, 1, 32],
+                    Position: [0, 0.5, -72],
+                    Color: [120, 124, 135],
+                    Anchored: true,
+                    Material: 'SmoothPlastic',
+                },
+            },
+            {
+                className: 'Part',
+                parent: 'Lobby',
+                properties: {
+                    Name: 'LobbySpawn',
+                    Size: [8, 1, 8],
+                    Position: [0, 1, -72],
+                    Color: [103, 192, 128],
+                    Anchored: true,
+                    Material: 'SmoothPlastic',
+                },
+            }
+        );
+    }
+
+    instances.push(
+        {
+            className: 'Model',
+            parent: 'Workspace',
+            properties: { Name: 'Arena' },
+        },
+        {
+            className: 'Part',
+            parent: 'Arena',
+            properties: {
+                Name: 'ArenaFloor',
+                Size: [120, 1, 84],
+                Position: [0, 0.5, 0],
+                Color: [89, 98, 112],
+                Anchored: true,
+                Material: 'SmoothPlastic',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'Arena',
+            properties: {
+                Name: 'NorthWall',
+                Size: [120, 18, 2],
+                Position: [0, 9, -42],
+                Color: [70, 76, 87],
+                Anchored: true,
+                Material: 'SmoothPlastic',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'Arena',
+            properties: {
+                Name: 'SouthWall',
+                Size: [120, 18, 2],
+                Position: [0, 9, 42],
+                Color: [70, 76, 87],
+                Anchored: true,
+                Material: 'SmoothPlastic',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'Arena',
+            properties: {
+                Name: 'WestWall',
+                Size: [2, 18, 84],
+                Position: [-60, 9, 0],
+                Color: [70, 76, 87],
+                Anchored: true,
+                Material: 'SmoothPlastic',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'Arena',
+            properties: {
+                Name: 'EastWall',
+                Size: [2, 18, 84],
+                Position: [60, 9, 0],
+                Color: [70, 76, 87],
+                Anchored: true,
+                Material: 'SmoothPlastic',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'Arena',
+            properties: {
+                Name: 'CenterLane',
+                Size: [72, 1, 12],
+                Position: [0, 1, 0],
+                Color: [176, 180, 188],
+                Anchored: true,
+                Material: 'SmoothPlastic',
+            },
+        },
+        {
+            className: 'Model',
+            parent: 'Arena',
+            properties: { Name: 'RedBase' },
+        },
+        {
+            className: 'Part',
+            parent: 'RedBase',
+            properties: {
+                Name: 'RedBasePlatform',
+                Size: [20, 1, 16],
+                Position: [-44, 1, 0],
+                Color: [205, 88, 88],
+                Anchored: true,
+                Material: 'SmoothPlastic',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'RedBase',
+            properties: {
+                Name: 'RedSpawn',
+                Size: [8, 1, 8],
+                Position: [-48, 2, 0],
+                Color: [255, 102, 102],
+                Anchored: true,
+                Material: 'SmoothPlastic',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'RedBase',
+            properties: {
+                Name: 'RedFlagStand',
+                Size: [4, 6, 4],
+                Position: [-38, 3, 0],
+                Color: [180, 50, 50],
+                Anchored: true,
+                Material: 'SmoothPlastic',
+            },
+        },
+        {
+            className: 'Model',
+            parent: 'Arena',
+            properties: { Name: 'BlueBase' },
+        },
+        {
+            className: 'Part',
+            parent: 'BlueBase',
+            properties: {
+                Name: 'BlueBasePlatform',
+                Size: [20, 1, 16],
+                Position: [44, 1, 0],
+                Color: [91, 132, 215],
+                Anchored: true,
+                Material: 'SmoothPlastic',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'BlueBase',
+            properties: {
+                Name: 'BlueSpawn',
+                Size: [8, 1, 8],
+                Position: [48, 2, 0],
+                Color: [95, 162, 255],
+                Anchored: true,
+                Material: 'SmoothPlastic',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'BlueBase',
+            properties: {
+                Name: 'BlueFlagStand',
+                Size: [4, 6, 4],
+                Position: [38, 3, 0],
+                Color: [46, 104, 214],
+                Anchored: true,
+                Material: 'SmoothPlastic',
+            },
+        }
+    );
+
+    return {
+        explanation: noScripts
+            ? 'Created a lobby and arena blockout preview.'
+            : "Created the map shell for phase 1. Reply 'continue' for phase 2.",
+        complexity: noScripts ? 'moderate' : 'complex',
+        phases,
+        currentPhase: 1,
+        totalPhases: noScripts ? 1 : phases.length,
+        instances,
+        scripts: [],
+    };
+}
+
+function buildDeterministicFallback(prompt) {
+    return buildMapLayoutFallback(prompt);
+}
+
 function buildCompletionRequest(messages, options = {}) {
     const request = {
         model: AI_MODEL,
@@ -886,13 +1208,19 @@ app.post('/generate', apiLimiter, async (req, res) => {
                 });
                 console.warn('Recovered invalid JSON response with repair pass.');
             } catch (_) {
-                session.messages = session.messages.slice(0, historyLengthBeforeTurn);
-                console.error('AI returned unparseable JSON:\n', rawText.slice(0, 500));
-                return res.status(502).json({
-                    error: 'AI Response Parse Error',
-                    details: { message: 'The AI returned text that is not valid JSON.' },
-                    suggestion: 'Try rephrasing your prompt more specifically.',
-                });
+                const fallback = buildDeterministicFallback(prompt);
+                if (fallback) {
+                    parsed = fallback;
+                    console.warn('Recovered invalid JSON response with deterministic fallback.');
+                } else {
+                    session.messages = session.messages.slice(0, historyLengthBeforeTurn);
+                    console.error('AI returned unparseable JSON:\n', rawText.slice(0, 500));
+                    return res.status(502).json({
+                        error: 'AI Response Parse Error',
+                        details: { message: 'The AI returned text that is not valid JSON.' },
+                        suggestion: 'Try rephrasing your prompt more specifically.',
+                    });
+                }
             }
         }
 
@@ -912,6 +1240,15 @@ app.post('/generate', apiLimiter, async (req, res) => {
                 }
             } catch (_) {
                 // Fall through to the normal validation error below.
+            }
+        }
+
+        if (!validation.valid) {
+            const fallback = buildDeterministicFallback(prompt);
+            if (fallback) {
+                parsed = fallback;
+                validation = validateResponseStructure(parsed);
+                console.warn('Recovered invalid response structure with deterministic fallback.');
             }
         }
 
@@ -946,13 +1283,9 @@ app.post('/generate', apiLimiter, async (req, res) => {
                 .map(i => {
                     const props = {};
                     for (const [k, v] of Object.entries(i.properties || {})) {
-                        if (['Size','Position','Color'].includes(k)) {
-                            if (Array.isArray(v) && v.length === 3 && v.every(n => typeof n === 'number'))
-                                props[k] = v;
-                        } else if (k === 'CFrame') {
-                            if (typeof v === 'object') props[k] = v;
-                        } else if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
-                            props[k] = v;
+                        const safeValue = sanitizePropertyValue(k, v);
+                        if (safeValue !== undefined) {
+                            props[k] = safeValue;
                         }
                     }
                     const safeInst = {

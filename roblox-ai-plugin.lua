@@ -278,6 +278,60 @@ local function makeInfoBox(order, bg, textColor, parent)
     return lbl
 end
 
+local function makeViewerCard(order, title, description, emptyText, height)
+    local card = makeCard(order)
+    makeLabel(title, 1, 18, C.white, true, false, card, Enum.Font.GothamBold, 14)
+    makeLabel(description, 2, 32, C.subtext, false, true, card, Enum.Font.Gotham, 12)
+
+    local emptyLbl = makeLabel(emptyText, 3, 18, C.muted, false, true, card, Enum.Font.Gotham, 12)
+    emptyLbl.Visible = true
+
+    local viewer = Instance.new("TextBox")
+    viewer.Size             = UDim2.new(1, 0, 0, height or 180)
+    viewer.BackgroundColor3 = C.input
+    viewer.TextColor3       = C.white
+    viewer.Text             = ""
+    viewer.ClearTextOnFocus = false
+    viewer.MultiLine        = true
+    viewer.TextWrapped      = false
+    viewer.TextXAlignment   = Enum.TextXAlignment.Left
+    viewer.TextYAlignment   = Enum.TextYAlignment.Top
+    viewer.Font             = Enum.Font.Code
+    viewer.TextSize         = 13
+    viewer.LayoutOrder      = 4
+    viewer.Visible          = false
+    viewer.Parent           = card
+    pcall(function()
+        viewer.TextEditable = false
+    end)
+    applyCorner(viewer, 8)
+    applyStroke(viewer, C.border, 1, 0.4)
+
+    local viewerPad = Instance.new("UIPadding")
+    viewerPad.PaddingLeft   = UDim.new(0, 10)
+    viewerPad.PaddingRight  = UDim.new(0, 10)
+    viewerPad.PaddingTop    = UDim.new(0, 10)
+    viewerPad.PaddingBottom = UDim.new(0, 10)
+    viewerPad.Parent = viewer
+
+    return card, viewer, emptyLbl
+end
+
+local function makeTabButton(text, parent)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0.333, -4, 1, 0)
+    btn.BackgroundColor3 = C.surfaceAlt
+    btn.Text = text
+    btn.TextColor3 = C.subtext
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 12
+    btn.AutoButtonColor = true
+    btn.Parent = parent
+    applyCorner(btn, 8)
+    applyStroke(btn, C.border, 1, 0.45)
+    return btn
+end
+
 -- ── UI layout ─────────────────────────────────────────────────
 local headerCard = makeCard(1)
 makeLabel("Roblox AI Assistant", 1, 24, C.white, true, false, headerCard, Enum.Font.GothamBold, 18)
@@ -441,7 +495,55 @@ applyBtn.AutoButtonColor = false
 applyBtn.TextColor3 = C.subtext
 continueBtn.Visible = false
 
-local actionsCard = makeCard(5)
+local viewerTabsCard = makeCard(5)
+makeLabel("Viewer Tabs", 1, 18, C.white, true, false, viewerTabsCard, Enum.Font.GothamBold, 14)
+makeLabel(
+    "Switch between generated script output, 3D output, and hierarchy views for the current preview.",
+    2, 32, C.subtext, false, true, viewerTabsCard, Enum.Font.Gotham, 12
+)
+
+local viewerTabsRow = Instance.new("Frame")
+viewerTabsRow.Size = UDim2.new(1, 0, 0, 34)
+viewerTabsRow.BackgroundTransparency = 1
+viewerTabsRow.LayoutOrder = 3
+viewerTabsRow.Parent = viewerTabsCard
+
+local viewerTabsLayout = Instance.new("UIListLayout")
+viewerTabsLayout.FillDirection = Enum.FillDirection.Horizontal
+viewerTabsLayout.Padding = UDim.new(0, 6)
+viewerTabsLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+viewerTabsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+viewerTabsLayout.Parent = viewerTabsRow
+
+local scriptTabBtn = makeTabButton("Script", viewerTabsRow)
+local outputTabBtn = makeTabButton("3D Output", viewerTabsRow)
+local architectureTabBtn = makeTabButton("Hierarchy", viewerTabsRow)
+
+local scriptViewerCard, scriptViewer, scriptViewerEmpty = makeViewerCard(
+    6,
+    "Script Viewer",
+    "Inspect the Luau scripts returned by the backend for the current preview or applied result.",
+    "No generated script output yet.",
+    220
+)
+
+local outputViewerCard, outputViewer, outputViewerEmpty = makeViewerCard(
+    7,
+    "3D Output Viewer",
+    "Review generated 3D items, placement data, and object details for the current turn.",
+    "No generated 3D item output yet.",
+    190
+)
+
+local architectureViewerCard, architectureViewer, architectureViewerEmpty = makeViewerCard(
+    8,
+    "Architecture Viewer",
+    "See the generated hierarchy for models, parts, and layout structure before or after apply.",
+    "No generated architecture/layout output yet.",
+    210
+)
+
+local actionsCard = makeCard(9)
 makeLabel("Session Controls", 1, 18, C.white, true, false, actionsCard, Enum.Font.GothamBold, 14)
 makeLabel(
     "Undo the last applied generation or reset the current conversation before a new request.",
@@ -529,6 +631,262 @@ local function buildPreviewSummary(data, targetParent)
     return table.concat(lines, "\n")
 end
 
+local function formatNumber(n)
+    if type(n) ~= "number" then
+        return tostring(n)
+    end
+    if math.floor(n) == n then
+        return tostring(n)
+    end
+    return string.format("%.2f", n)
+end
+
+local function formatTriple(value)
+    if type(value) ~= "table" or #value ~= 3 then
+        return nil
+    end
+    return string.format(
+        "(%s, %s, %s)",
+        formatNumber(value[1]),
+        formatNumber(value[2]),
+        formatNumber(value[3])
+    )
+end
+
+local function formatColor(value)
+    if type(value) ~= "table" or #value ~= 3 then
+        return nil
+    end
+    return string.format(
+        "RGB(%s, %s, %s)",
+        formatNumber(value[1]),
+        formatNumber(value[2]),
+        formatNumber(value[3])
+    )
+end
+
+local function getPreviewParentName(instData, targetParent)
+    local parentName = instData and instData.parent
+    if type(parentName) ~= "string" or parentName == "" or parentName == "Selection" then
+        return getTargetLabel(targetParent)
+    end
+    return parentName
+end
+
+local function buildScriptViewerText(data)
+    local scripts = type(data.scripts) == "table" and data.scripts or nil
+    if not scripts or #scripts == 0 then
+        return nil
+    end
+
+    local lines = {}
+    for i, scriptData in ipairs(scripts) do
+        lines[#lines + 1] = string.format(
+            "[%d] %s (%s -> %s)",
+            i,
+            tostring(scriptData.name or "GeneratedScript"),
+            tostring(scriptData.type or "Script"),
+            tostring(scriptData.parent or "Workspace")
+        )
+        lines[#lines + 1] = string.rep("-", 56)
+
+        local source = tostring(scriptData.source or "")
+        if #source > 12000 then
+            source = source:sub(1, 12000) .. "\n-- [truncated in viewer]"
+        end
+        lines[#lines + 1] = source ~= "" and source or "-- no source returned --"
+
+        if i < #scripts then
+            lines[#lines + 1] = ""
+        end
+    end
+
+    return table.concat(lines, "\n")
+end
+
+local function build3DOutputText(data, targetParent, applied)
+    local instances = type(data.instances) == "table" and data.instances or nil
+    if not instances or #instances == 0 then
+        return nil
+    end
+
+    local lines = {
+        applied and "Generated 3D item output: Applied to Studio." or "Generated 3D item output: Preview only.",
+        "Target root: " .. getTargetLabel(targetParent),
+        "",
+    }
+
+    local limit = math.min(#instances, 30)
+    for i = 1, limit do
+        local instData = instances[i]
+        local props = instData.properties or {}
+        lines[#lines + 1] = string.format(
+            "[%d] %s (%s)",
+            i,
+            tostring(props.Name or instData.className),
+            tostring(instData.className)
+        )
+        lines[#lines + 1] = "Parent: " .. getPreviewParentName(instData, targetParent)
+
+        local size = formatTriple(props.Size)
+        if size then
+            lines[#lines + 1] = "Size: " .. size
+        end
+
+        local position = formatTriple(props.Position)
+        if not position and type(props.CFrame) == "table" then
+            position = formatTriple(props.CFrame.position)
+        end
+        if position then
+            lines[#lines + 1] = "Position: " .. position
+        end
+
+        local color = formatColor(props.Color)
+        if color then
+            lines[#lines + 1] = "Color: " .. color
+        end
+
+        if props.Material then
+            lines[#lines + 1] = "Material: " .. tostring(props.Material)
+        end
+        if props.Anchored ~= nil then
+            lines[#lines + 1] = "Anchored: " .. tostring(props.Anchored)
+        end
+
+        lines[#lines + 1] = ""
+    end
+
+    if #instances > limit then
+        lines[#lines + 1] = string.format("...and %d more generated item(s)", #instances - limit)
+    end
+
+    return table.concat(lines, "\n")
+end
+
+local function buildArchitectureViewerText(data, targetParent, applied)
+    local instances = type(data.instances) == "table" and data.instances or nil
+    if not instances or #instances == 0 then
+        return nil
+    end
+
+    local rootLabel = getTargetLabel(targetParent)
+    local childrenByParent = {}
+
+    for i, instData in ipairs(instances) do
+        local props = instData.properties or {}
+        local nodeName = tostring(props.Name or (instData.className .. "_" .. tostring(i)))
+        local parentName = getPreviewParentName(instData, targetParent)
+        childrenByParent[parentName] = childrenByParent[parentName] or {}
+        table.insert(childrenByParent[parentName], {
+            name = nodeName,
+            className = tostring(instData.className),
+        })
+    end
+
+    local lines = {
+        applied and "Architecture/layout output: Applied to Studio." or "Architecture/layout output: Preview only.",
+        "",
+        rootLabel,
+    }
+
+    local visited = {}
+    local function renderTree(parentName, prefix)
+        local children = childrenByParent[parentName]
+        if not children then
+            return
+        end
+
+        for index, child in ipairs(children) do
+            local isLast = index == #children
+            local branch = isLast and "└─ " or "├─ "
+            local childPrefix = prefix .. (isLast and "   " or "│  ")
+            lines[#lines + 1] = prefix .. branch .. child.name .. " [" .. child.className .. "]"
+
+            if not visited[child.name] then
+                visited[child.name] = true
+                renderTree(child.name, childPrefix)
+            end
+        end
+    end
+
+    renderTree(rootLabel, "")
+
+    if rootLabel ~= "Workspace" and childrenByParent["Workspace"] then
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = "Workspace"
+        renderTree("Workspace", "")
+    end
+
+    return table.concat(lines, "\n")
+end
+
+local function setViewerContent(viewer, emptyLabel, text)
+    local hasText = type(text) == "string" and text ~= ""
+    viewer.Text = hasText and text or ""
+    viewer.Visible = hasText
+    emptyLabel.Visible = not hasText
+end
+
+local activeViewerTab = "script"
+local viewerTabs = {
+    script = {
+        button = scriptTabBtn,
+        card = scriptViewerCard,
+        activeColor = C.accent,
+    },
+    output = {
+        button = outputTabBtn,
+        card = outputViewerCard,
+        activeColor = C.greenSoft,
+    },
+    architecture = {
+        button = architectureTabBtn,
+        card = architectureViewerCard,
+        activeColor = C.orangeSoft,
+    },
+}
+
+local function setViewerTab(tabName)
+    local targetTab = viewerTabs[tabName] and tabName or "script"
+    activeViewerTab = targetTab
+
+    for name, tab in pairs(viewerTabs) do
+        local selected = name == targetTab
+        tab.card.Visible = selected
+        tab.button.BackgroundColor3 = selected and tab.activeColor or C.surfaceAlt
+        tab.button.TextColor3 = selected and C.white or C.subtext
+        tab.button.AutoButtonColor = not selected
+    end
+end
+
+local function getPreferredViewerTab(data)
+    if type(data.scripts) == "table" and #data.scripts > 0 then
+        return "script"
+    end
+
+    if type(data.instances) == "table" and #data.instances > 0 then
+        for _, instData in ipairs(data.instances) do
+            local parentName = instData and instData.parent
+            if type(parentName) == "string"
+                and parentName ~= ""
+                and parentName ~= "Workspace"
+                and parentName ~= "Selection" then
+                return "architecture"
+            end
+        end
+        return "output"
+    end
+
+    return activeViewerTab
+end
+
+local function updateDemoViewers(data, targetParent, applied)
+    setViewerContent(scriptViewer, scriptViewerEmpty, buildScriptViewerText(data))
+    setViewerContent(outputViewer, outputViewerEmpty, build3DOutputText(data, targetParent, applied))
+    setViewerContent(architectureViewer, architectureViewerEmpty, buildArchitectureViewerText(data, targetParent, applied))
+    setViewerTab(getPreferredViewerTab(data))
+end
+
 local function showPreview(text)
     previewBox.Text = tostring(text or "")
     previewBox.Visible = text ~= nil and text ~= ""
@@ -565,7 +923,31 @@ local function clearInfoBoxes()
     explainBox.Visible  = false
     errorBox.Visible    = false
     warningBox.Visible  = false
+    scriptViewer.Text = ""
+    scriptViewer.Visible = false
+    scriptViewerEmpty.Visible = true
+    outputViewer.Text = ""
+    outputViewer.Visible = false
+    outputViewerEmpty.Visible = true
+    architectureViewer.Text = ""
+    architectureViewer.Visible = false
+    architectureViewerEmpty.Visible = true
+    setViewerTab("script")
 end
+
+scriptTabBtn.MouseButton1Click:Connect(function()
+    setViewerTab("script")
+end)
+
+outputTabBtn.MouseButton1Click:Connect(function()
+    setViewerTab("output")
+end)
+
+architectureTabBtn.MouseButton1Click:Connect(function()
+    setViewerTab("architecture")
+end)
+
+setViewerTab("script")
 
 local function setBusy(busy)
     generateBtn.Active           = not busy
@@ -834,6 +1216,7 @@ local function applyPendingPreview()
     showPreview(buildPreviewSummary(preview.data, preview.targetParent) .. "\nStatus: Applied to Studio.")
     showExplain(preview.data.explanation or "Done")
     showWarnings(preview.data.warnings)
+    updateDemoViewers(preview.data, preview.targetParent, true)
     promptBox.Text = ""
 
     pendingPreview = nil
@@ -903,16 +1286,17 @@ local function doGenerate(promptText)
                             targetParent = targetParent,
                         }
                         showPreview(buildPreviewSummary(data, targetParent))
+                        updateDemoViewers(data, targetParent, false)
                         setApplyReady(true)
                         setStatus("Preview ready. Review the backend response, then apply.", C.green)
                     else
+                        updateDemoViewers(data, targetParent, false)
                         setStatus("Backend response contained no changes to apply.", C.subtext)
                     end
 
                     showExplain(explanation)
                     showWarnings(data.warnings)
                     updatePhaseUI(data)
-                    continueBtn.Visible = false
                 end
             else
                 setStatus("Server response could not be read.", C.red)
