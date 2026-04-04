@@ -717,6 +717,57 @@ function buildCompletionRequest(messages, options = {}) {
     return request;
 }
 
+async function repairStructuredResponse({ prompt, rawText, performanceSystemMessage, validationErrors }) {
+    const repairMessages = [
+        { role: 'system', content: FAST_SYSTEM_PROMPT },
+        {
+            role: 'system',
+            content: [
+                'Your previous reply was invalid for the Roblox plugin.',
+                'Return only one valid JSON object that matches the required schema.',
+                'Do not include markdown, bullets, code fences, or explanation outside JSON.',
+                'If the request is large, return a smaller valid first phase instead of failing.',
+            ].join(' '),
+        },
+    ];
+
+    if (performanceSystemMessage) {
+        repairMessages.push({ role: 'system', content: performanceSystemMessage });
+    }
+
+    repairMessages.push({
+        role: 'user',
+        content: `Original request:\n${String(prompt || '').slice(0, 3000)}`,
+    });
+
+    if (validationErrors && validationErrors.length > 0) {
+        repairMessages.push({
+            role: 'user',
+            content: `Schema issues to fix:\n- ${validationErrors.join('\n- ').slice(0, 2000)}`,
+        });
+    }
+
+    repairMessages.push({
+        role: 'assistant',
+        content: String(rawText || '').slice(0, 12000),
+    });
+
+    repairMessages.push({
+        role: 'user',
+        content: 'Rewrite the previous answer as strict JSON only.',
+    });
+
+    const repairCompletion = await retryWithBackoff(() =>
+        aiClient.chat.completions.create(buildCompletionRequest(repairMessages, {
+            maxTokens: Math.min(900, estimateMaxTokens(prompt)),
+        }))
+    );
+
+    const repairMessage = repairCompletion.choices[0].message || {};
+    const repairRawText = typeof repairMessage.content === 'string' ? repairMessage.content : '';
+    return JSON.parse(extractJsonText(repairRawText));
+}
+
 // ── [B3] Retry with exponential backoff ──────────────────────
 async function retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -826,18 +877,44 @@ app.post('/generate', apiLimiter, async (req, res) => {
         let parsed;
         try {
             parsed = JSON.parse(jsonText);
-        } catch (_) {
-            session.messages = session.messages.slice(0, historyLengthBeforeTurn);
-            console.error('AI returned unparseable JSON:\n', rawText.slice(0, 500));
-            return res.status(502).json({
-                error: 'AI Response Parse Error',
-                details: { message: 'The AI returned text that is not valid JSON.' },
-                suggestion: 'Try rephrasing your prompt more specifically.',
-            });
+        } catch (parseError) {
+            try {
+                parsed = await repairStructuredResponse({
+                    prompt,
+                    rawText,
+                    performanceSystemMessage,
+                });
+                console.warn('Recovered invalid JSON response with repair pass.');
+            } catch (_) {
+                session.messages = session.messages.slice(0, historyLengthBeforeTurn);
+                console.error('AI returned unparseable JSON:\n', rawText.slice(0, 500));
+                return res.status(502).json({
+                    error: 'AI Response Parse Error',
+                    details: { message: 'The AI returned text that is not valid JSON.' },
+                    suggestion: 'Try rephrasing your prompt more specifically.',
+                });
+            }
         }
 
         // [B1] JSON structure validation
-        const validation = validateResponseStructure(parsed);
+        let validation = validateResponseStructure(parsed);
+        if (!validation.valid) {
+            try {
+                parsed = await repairStructuredResponse({
+                    prompt,
+                    rawText,
+                    performanceSystemMessage,
+                    validationErrors: validation.errors,
+                });
+                validation = validateResponseStructure(parsed);
+                if (validation.valid) {
+                    console.warn('Recovered invalid response structure with repair pass.');
+                }
+            } catch (_) {
+                // Fall through to the normal validation error below.
+            }
+        }
+
         if (!validation.valid) {
             session.messages = session.messages.slice(0, historyLengthBeforeTurn);
             console.error('AI response failed structure validation:', validation.errors);

@@ -783,6 +783,9 @@ local function parseHttpError(errMsg)
     if errMsg:match("404")          then
         return "Endpoint not found.", "Save only the base backend URL, without a trailing slash or /generate."
     end
+    if errMsg:match("500") or errMsg:match("502") then
+        return "Backend request failed.", "Check the backend error details below or review server logs."
+    end
     if errMsg:match("503")          then return "AI provider is down.", "Try again in a few minutes." end
     if errMsg:match("ECONNREFUSED") then return "Backend unreachable.", "Check Backend URL in plugin settings." end
     if errMsg:match("timeout") or errMsg:match("ETIMEDOUT") then
@@ -858,63 +861,89 @@ local function doGenerate(promptText)
         or  promptText:sub(1, 4000)
     local targetParent = getCurrentTargetParent()
     local requestBaseUrl = normalizeBackendURL(BACKEND_URL) or BACKEND_URL
+    local requestPayload = HttpService:JSONEncode({
+        prompt         = fullPrompt,
+        conversationId = conversationId,
+    })
 
-    local ok, result = pcall(function()
-        return HttpService:PostAsync(
-            requestBaseUrl .. "/generate",
-            HttpService:JSONEncode({
-                prompt         = fullPrompt,
-                conversationId = conversationId,
-            }),
-            Enum.HttpContentType.ApplicationJson
-        )
+    local ok, response = pcall(function()
+        return HttpService:RequestAsync({
+            Url = requestBaseUrl .. "/generate",
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json",
+            },
+            Body = requestPayload,
+        })
     end)
 
     if ok then
+        local body = response.Body or ""
         local okJson, data = pcall(function()
-            return HttpService:JSONDecode(result)
+            return HttpService:JSONDecode(body)
         end)
 
-        if okJson then
-            if data.error then
-                -- [B2] Structured error from server
-                local detail     = data.details and data.details.message or nil
-                local suggestion = data.suggestion or nil
-                setStatus("Request returned an error.", C.red)
-                showError(data.error, detail, suggestion)
-            else
-                local explanation = data.explanation or "Done"
-                local hasInstances = type(data.instances) == "table" and #data.instances > 0
-                local hasScripts   = type(data.scripts) == "table" and #data.scripts > 0
-                local canApply     = hasInstances or hasScripts
-
-                if canApply then
-                    pendingPreview = {
-                        data = data,
-                        targetParent = targetParent,
-                    }
-                    showPreview(buildPreviewSummary(data, targetParent))
-                    setApplyReady(true)
-                    setStatus("Preview ready. Review the backend response, then apply.", C.green)
+        if response.Success then
+            if okJson then
+                if data.error then
+                    -- [B2] Structured error from server
+                    local detail     = data.details and data.details.message or nil
+                    local suggestion = data.suggestion or nil
+                    setStatus("Request returned an error.", C.red)
+                    showError(data.error, detail, suggestion)
                 else
-                    setStatus("Backend response contained no changes to apply.", C.subtext)
-                end
+                    local explanation = data.explanation or "Done"
+                    local hasInstances = type(data.instances) == "table" and #data.instances > 0
+                    local hasScripts   = type(data.scripts) == "table" and #data.scripts > 0
+                    local canApply     = hasInstances or hasScripts
 
-                showExplain(explanation)
-                showWarnings(data.warnings)
-                updatePhaseUI(data)
-                continueBtn.Visible = false
+                    if canApply then
+                        pendingPreview = {
+                            data = data,
+                            targetParent = targetParent,
+                        }
+                        showPreview(buildPreviewSummary(data, targetParent))
+                        setApplyReady(true)
+                        setStatus("Preview ready. Review the backend response, then apply.", C.green)
+                    else
+                        setStatus("Backend response contained no changes to apply.", C.subtext)
+                    end
+
+                    showExplain(explanation)
+                    showWarnings(data.warnings)
+                    updatePhaseUI(data)
+                    continueBtn.Visible = false
+                end
+            else
+                setStatus("Server response could not be read.", C.red)
+                showError("Server returned unreadable data.", nil, "Try again. If it persists, check server logs.")
             end
         else
-            setStatus("Server response could not be read.", C.red)
-            showError("Server returned unreadable data.", nil, "Try again. If it persists, check server logs.")
+            local detail = response.StatusMessage or ("HTTP " .. tostring(response.StatusCode))
+
+            if okJson and data then
+                local errorMessage = data.error or "Backend request failed."
+                local errorDetail = data.details and data.details.message or detail
+                local suggestion = data.suggestion
+                if not suggestion then
+                    local _, parsedSuggestion = parseHttpError(detail)
+                    suggestion = parsedSuggestion
+                end
+                setStatus("Request could not be completed.", C.red)
+                showError(errorMessage, errorDetail, suggestion)
+            else
+                local msg, sug = parseHttpError(detail)
+                setStatus("Request could not be completed.", C.red)
+                showError(msg, detail, sug)
+            end
+
+            warn("[AI Plugin] HTTP error: " .. tostring(detail) .. " body: " .. tostring(body):sub(1, 200))
         end
     else
-        -- HTTP-level failure
-        local msg, sug = parseHttpError(result)
+        local msg, sug = parseHttpError(response)
         setStatus("Request could not be completed.", C.red)
         showError(msg, nil, sug)
-        warn("[AI Plugin] HTTP error: " .. tostring(result))
+        warn("[AI Plugin] RequestAsync error: " .. tostring(response))
     end
 
     setBusy(false)
