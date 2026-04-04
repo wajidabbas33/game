@@ -526,27 +526,162 @@ function checkCrossReferences(data) {
     return warnings;
 }
 
-function extractJsonText(rawText) {
-    const text = String(rawText || '').trim();
-
-    // Some compatible providers may prepend reasoning text or wrap responses with <think> tags.
-    const withoutThink = text.replace(/^<think>[\s\S]*?<\/think>\s*/i, '').trim();
-    const withoutFences = withoutThink
-        .replace(/^```[a-z]*\n?/i, '')
-        .replace(/```$/i, '')
+function normalizeModelText(rawText) {
+    return String(rawText || '')
+        .replace(/^\uFEFF/, '')
+        .replace(/\r\n?/g, '\n')
+        .replace(/<think>[\s\S]*?<\/think>/gi, '')
         .trim();
+}
 
-    if (withoutFences.startsWith('{') && withoutFences.endsWith('}')) {
-        return withoutFences;
+function normalizeJsonCandidate(candidate) {
+    return String(candidate || '')
+        .replace(/^\uFEFF/, '')
+        .replace(/^json\s*/i, '')
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .replace(/[“”]/g, '"')
+        .replace(/[‘’]/g, '\'')
+        .replace(/,\s*([}\]])/g, '$1')
+        .trim();
+}
+
+function collectBalancedJsonObjects(text) {
+    const candidates = [];
+    let start = -1;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let index = 0; index < text.length; index += 1) {
+        const char = text[index];
+
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+            } else if (char === '\\') {
+                escaped = true;
+            } else if (char === '"') {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (char === '"') {
+            inString = true;
+            continue;
+        }
+
+        if (char === '{') {
+            if (depth === 0) {
+                start = index;
+            }
+            depth += 1;
+            continue;
+        }
+
+        if (char === '}' && depth > 0) {
+            depth -= 1;
+            if (depth === 0 && start !== -1) {
+                candidates.push(text.slice(start, index + 1));
+                start = -1;
+            }
+        }
     }
 
-    const firstBrace = withoutFences.indexOf('{');
-    const lastBrace = withoutFences.lastIndexOf('}');
+    return candidates;
+}
+
+function extractJsonCandidates(rawText) {
+    const text = normalizeModelText(rawText);
+    const candidates = [];
+    const seen = new Set();
+
+    const pushCandidate = value => {
+        const candidate = normalizeJsonCandidate(value);
+        if (!candidate || seen.has(candidate)) {
+            return;
+        }
+        seen.add(candidate);
+        candidates.push(candidate);
+    };
+
+    pushCandidate(text);
+
+    const fencedMatches = text.matchAll(/```(?:json|javascript|js)?\s*([\s\S]*?)```/gi);
+    for (const match of fencedMatches) {
+        pushCandidate(match[1]);
+    }
+
+    for (const candidate of collectBalancedJsonObjects(text)) {
+        pushCandidate(candidate);
+    }
+
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
     if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-        return withoutFences.slice(firstBrace, lastBrace + 1);
+        pushCandidate(text.slice(firstBrace, lastBrace + 1));
     }
 
-    return withoutFences;
+    return candidates;
+}
+
+function tryParseJsonCandidate(candidate) {
+    const normalized = normalizeJsonCandidate(candidate);
+    if (!normalized) {
+        return null;
+    }
+
+    try {
+        const parsed = JSON.parse(normalized);
+        if (typeof parsed === 'string') {
+            return JSON.parse(normalizeJsonCandidate(parsed));
+        }
+        return parsed;
+    } catch (_) {
+        // Fall through to the caller.
+    }
+
+    return null;
+}
+
+function parseJsonResponse(rawText) {
+    const candidates = extractJsonCandidates(rawText);
+    let bestParsed = null;
+    let bestScore = -1;
+
+    for (const candidate of candidates) {
+        const parsed = tryParseJsonCandidate(candidate);
+        if (parsed && typeof parsed === 'object') {
+            const score = [
+                typeof parsed.explanation === 'string',
+                typeof parsed.complexity === 'string',
+                Array.isArray(parsed.instances),
+                Array.isArray(parsed.scripts),
+                Array.isArray(parsed.phases),
+                typeof parsed.currentPhase === 'number',
+                typeof parsed.totalPhases === 'number',
+            ].filter(Boolean).length;
+
+            if (score > bestScore) {
+                bestParsed = parsed;
+                bestScore = score;
+            }
+        }
+    }
+
+    if (bestParsed) {
+        return bestParsed;
+    }
+
+    const error = new Error('Could not parse AI JSON response');
+    error.rawText = String(rawText || '').slice(0, 500);
+    throw error;
+}
+
+function extractJsonText(rawText) {
+    const candidates = extractJsonCandidates(rawText);
+    return candidates[0] || normalizeModelText(rawText);
 }
 
 function countKeywordHits(text, keywords) {
@@ -1056,6 +1191,32 @@ function buildCompletionRequest(messages, options = {}) {
     return request;
 }
 
+function getCompletionText(message) {
+    const content = message && message.content;
+
+    if (typeof content === 'string') {
+        return content;
+    }
+
+    if (Array.isArray(content)) {
+        return content
+            .map(part => {
+                if (typeof part === 'string') {
+                    return part;
+                }
+                if (part && typeof part.text === 'string') {
+                    return part.text;
+                }
+                return '';
+            })
+            .filter(Boolean)
+            .join('\n')
+            .trim();
+    }
+
+    return '';
+}
+
 function normalizeInstanceShape(instance) {
     if (!instance || typeof instance !== 'object' || Array.isArray(instance)) {
         return instance;
@@ -1212,8 +1373,8 @@ async function repairStructuredResponse({ prompt, rawText, performanceSystemMess
     );
 
     const repairMessage = repairCompletion.choices[0].message || {};
-    const repairRawText = typeof repairMessage.content === 'string' ? repairMessage.content : '';
-    return JSON.parse(extractJsonText(repairRawText));
+    const repairRawText = getCompletionText(repairMessage);
+    return parseJsonResponse(repairRawText);
 }
 
 // ── [B3] Retry with exponential backoff ──────────────────────
@@ -1343,11 +1504,9 @@ app.post('/generate', apiLimiter, async (req, res) => {
 
             if (!parsed) {
                 const responseMessage = completion.choices[0].message || {};
-                rawText = typeof responseMessage.content === 'string' ? responseMessage.content : '';
-                const jsonText = extractJsonText(rawText);
-
+                rawText = getCompletionText(responseMessage);
                 try {
-                    parsed = JSON.parse(jsonText);
+                    parsed = parseJsonResponse(rawText);
                 } catch (parseError) {
                     try {
                         parsed = await repairStructuredResponse({
