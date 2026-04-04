@@ -724,11 +724,16 @@ function looksComplexPrompt(prompt) {
     const buildKeywords = [
         'capture the flag', 'king of the hill', 'round', 'lobby',
         'team', 'spawn', 'leaderboard', 'datastore', 'ui',
-        'wave', 'arena', 'base', 'flag', 'score', 'timer',
-        'polish', 'hud',
+        'wave', 'waves', 'survival', 'npc', 'enemy', 'enemies',
+        'arena', 'base', 'flag', 'score', 'timer',
+        'polish', 'hud', 'manager', 'system',
     ];
+    const isSystemHeavyPrompt = /\b(survival|waves?|npc|enemy|enemies|capture the flag|king of the hill|leaderboard|datastore)\b/.test(text)
+        && /\b(system|manager|spawn|timer|team|score|round|ai)\b/.test(text);
 
-    return text.length > 160 || countKeywordHits(text, buildKeywords) >= 4;
+    return text.length > 160
+        || countKeywordHits(text, buildKeywords) >= 3
+        || isSystemHeavyPrompt;
 }
 
 function shouldUseFastSystemPrompt(prompt, session) {
@@ -739,20 +744,22 @@ function shouldUseFastSystemPrompt(prompt, session) {
 
 function estimateMaxTokens(prompt, session) {
     const text = String(prompt || '').toLowerCase();
+    const isSystemHeavyPrompt = /\b(survival|waves?|npc|enemy|enemies|capture the flag|king of the hill|leaderboard|datastore)\b/.test(text)
+        && /\b(system|manager|spawn|timer|team|score|round|ai)\b/.test(text);
 
     if (isContinuePrompt(text) || isContextualFollowUpPrompt(prompt, session)) {
-        return 1400;
+        return 1600;
     }
 
-    if (looksComplexPrompt(text)) {
-        return 1200;
+    if (looksComplexPrompt(text) || isSystemHeavyPrompt) {
+        return 1900;
     }
 
     if (text.length < 100) {
-        return 700;
+        return 950;
     }
 
-    return 900;
+    return 1200;
 }
 
 function buildPerformanceSystemMessage(prompt, session) {
