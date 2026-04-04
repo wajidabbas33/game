@@ -1,0 +1,27 @@
+{
+  "name": "roblox-ai-plugin-backend",
+  "version": "5.0.0",
+  "description": "Backend server for the Roblox AI Studio Plugin with Qwen-powered game-mode AI capabilities",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node test-server.js"
+  },
+  "keywords": [
+    "roblox",
+    "ai",
+    "qwen",
+    "openai",
+    "game-development"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "openai": "^6.33.0"
+  }
+}
