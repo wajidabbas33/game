@@ -1023,6 +1023,23 @@ function buildDeterministicFallback(prompt) {
     return buildMapLayoutFallback(prompt);
 }
 
+function shouldUseDeterministicLayoutPreview(prompt) {
+    return wantsNoScripts(prompt) && looksLikeMapLayoutPrompt(prompt);
+}
+
+function withTimeout(promise, timeoutMs, code = 'AI_TIMEOUT') {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => {
+            setTimeout(() => {
+                const err = new Error(`Timed out after ${timeoutMs}ms`);
+                err.code = code;
+                reject(err);
+            }, timeoutMs);
+        }),
+    ]);
+}
+
 function buildCompletionRequest(messages, options = {}) {
     const request = {
         model: AI_MODEL,
@@ -1079,10 +1096,14 @@ async function repairStructuredResponse({ prompt, rawText, performanceSystemMess
         content: 'Rewrite the previous answer as strict JSON only.',
     });
 
-    const repairCompletion = await retryWithBackoff(() =>
-        aiClient.chat.completions.create(buildCompletionRequest(repairMessages, {
-            maxTokens: Math.min(900, estimateMaxTokens(prompt)),
-        }))
+    const repairCompletion = await withTimeout(
+        retryWithBackoff(() =>
+            aiClient.chat.completions.create(buildCompletionRequest(repairMessages, {
+                maxTokens: Math.min(900, estimateMaxTokens(prompt)),
+            }))
+        ),
+        20_000,
+        'AI_REPAIR_TIMEOUT'
     );
 
     const repairMessage = repairCompletion.choices[0].message || {};
@@ -1184,42 +1205,67 @@ app.post('/generate', apiLimiter, async (req, res) => {
 
         messages.push(...session.messages);
 
-        // [B3] Wrapped in retry with backoff
-        const completion = await retryWithBackoff(() =>
-            aiClient.chat.completions.create(buildCompletionRequest(messages, {
-                maxTokens: estimateMaxTokens(prompt),
-            }))
-        );
+        let rawText = '';
+        let parsed = null;
 
-        const responseMessage = completion.choices[0].message || {};
-        const rawText  = typeof responseMessage.content === 'string' ? responseMessage.content : '';
-        const jsonText = extractJsonText(rawText);
-
-        // Parse
-        let parsed;
-        try {
-            parsed = JSON.parse(jsonText);
-        } catch (parseError) {
+        if (shouldUseDeterministicLayoutPreview(prompt)) {
+            parsed = buildMapLayoutFallback(prompt);
+            console.warn('Used deterministic layout preview shortcut.');
+        } else {
+            let completion;
             try {
-                parsed = await repairStructuredResponse({
-                    prompt,
-                    rawText,
-                    performanceSystemMessage,
-                });
-                console.warn('Recovered invalid JSON response with repair pass.');
-            } catch (_) {
-                const fallback = buildDeterministicFallback(prompt);
-                if (fallback) {
-                    parsed = fallback;
-                    console.warn('Recovered invalid JSON response with deterministic fallback.');
+                completion = await withTimeout(
+                    retryWithBackoff(() =>
+                        aiClient.chat.completions.create(buildCompletionRequest(messages, {
+                            maxTokens: estimateMaxTokens(prompt),
+                        }))
+                    ),
+                    25_000
+                );
+            } catch (err) {
+                if (err.code === 'AI_TIMEOUT') {
+                    const fallback = buildDeterministicFallback(prompt);
+                    if (fallback) {
+                        parsed = fallback;
+                        console.warn('Recovered AI timeout with deterministic fallback.');
+                    } else {
+                        throw err;
+                    }
                 } else {
-                    session.messages = session.messages.slice(0, historyLengthBeforeTurn);
-                    console.error('AI returned unparseable JSON:\n', rawText.slice(0, 500));
-                    return res.status(502).json({
-                        error: 'AI Response Parse Error',
-                        details: { message: 'The AI returned text that is not valid JSON.' },
-                        suggestion: 'Try rephrasing your prompt more specifically.',
-                    });
+                    throw err;
+                }
+            }
+
+            if (!parsed) {
+                const responseMessage = completion.choices[0].message || {};
+                rawText = typeof responseMessage.content === 'string' ? responseMessage.content : '';
+                const jsonText = extractJsonText(rawText);
+
+                try {
+                    parsed = JSON.parse(jsonText);
+                } catch (parseError) {
+                    try {
+                        parsed = await repairStructuredResponse({
+                            prompt,
+                            rawText,
+                            performanceSystemMessage,
+                        });
+                        console.warn('Recovered invalid JSON response with repair pass.');
+                    } catch (_) {
+                        const fallback = buildDeterministicFallback(prompt);
+                        if (fallback) {
+                            parsed = fallback;
+                            console.warn('Recovered invalid JSON response with deterministic fallback.');
+                        } else {
+                            session.messages = session.messages.slice(0, historyLengthBeforeTurn);
+                            console.error('AI returned unparseable JSON:\n', rawText.slice(0, 500));
+                            return res.status(502).json({
+                                error: 'AI Response Parse Error',
+                                details: { message: 'The AI returned text that is not valid JSON.' },
+                                suggestion: 'Try rephrasing your prompt more specifically.',
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -1342,7 +1388,10 @@ app.post('/generate', apiLimiter, async (req, res) => {
             suggestion: '',
         };
 
-        if (err.code === 'ENOTFOUND' || err.code === 'ETIMEDOUT' || err.code === 'ECONNRESET') {
+        if (err.code === 'AI_TIMEOUT' || err.code === 'AI_REPAIR_TIMEOUT') {
+            resp.details  = { type: 'AI Timeout', message: `${providerName} took too long to respond.` };
+            resp.suggestion = 'Try a simpler prompt, or retry in a moment.';
+        } else if (err.code === 'ENOTFOUND' || err.code === 'ETIMEDOUT' || err.code === 'ECONNRESET') {
             resp.details  = { type: 'Network Error', message: `Could not reach the ${providerName} API.` };
             resp.suggestion = 'Check your internet connection and try again.';
         } else if (
