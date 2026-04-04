@@ -1068,17 +1068,49 @@ function normalizeInstanceShape(instance) {
         && !Array.isArray(normalized.properties)
     ) ? { ...normalized.properties } : {};
 
+    const normalizePropertyKey = (key) => {
+        if (typeof key !== 'string') {
+            return key;
+        }
+
+        const aliases = new Map([
+            ['name', 'Name'],
+            ['size', 'Size'],
+            ['position', 'Position'],
+            ['color', 'Color'],
+            ['backgroundcolor3', 'BackgroundColor3'],
+            ['textcolor3', 'TextColor3'],
+            ['resetonspawn', 'ResetOnSpawn'],
+            ['text', 'Text'],
+            ['anchored', 'Anchored'],
+            ['material', 'Material'],
+            ['transparency', 'Transparency'],
+            ['cancollide', 'CanCollide'],
+            ['cframe', 'CFrame'],
+            ['brickcolor', 'BrickColor'],
+            ['teamcolor', 'TeamColor'],
+        ]);
+
+        return aliases.get(key.toLowerCase()) || key;
+    };
+
+    const normalizedProperties = {};
+    for (const [key, value] of Object.entries(originalProperties)) {
+        normalizedProperties[normalizePropertyKey(key)] = value;
+    }
+
     for (const [key, value] of Object.entries(normalized)) {
         if (key === 'className' || key === 'parent' || key === 'properties') {
             continue;
         }
-        if (originalProperties[key] === undefined) {
-            originalProperties[key] = value;
+        const normalizedKey = normalizePropertyKey(key);
+        if (normalizedProperties[normalizedKey] === undefined) {
+            normalizedProperties[normalizedKey] = value;
         }
         delete normalized[key];
     }
 
-    normalized.properties = originalProperties;
+    normalized.properties = normalizedProperties;
     return normalized;
 }
 

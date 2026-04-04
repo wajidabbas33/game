@@ -1003,74 +1003,76 @@ end
 
 local function tryApplyProperty(inst, prop, value)
     pcall(function()
+        local resolvedProp = prop == "name" and "Name" or prop
+
+        -- UDim2 — detected by VALUE SHAPE, not property name
+        -- Handles GUI Size, Position, and other UDim2-based properties.
+        if type(value) == "table" and value.X and value.Y
+                and type(value.X) == "table" and type(value.Y) == "table" then
+            inst[resolvedProp] = UDim2.new(
+                value.X.Scale  or 0, value.X.Offset or 0,
+                value.Y.Scale  or 0, value.Y.Offset or 0
+            )
+
         -- Vector3 properties (array of 3 numbers)
-        if prop == "Size" or prop == "Position" then
+        elseif resolvedProp == "Size" or resolvedProp == "Position" then
             if type(value) == "table" and #value == 3 then
-                inst[prop] = Vector3.new(table.unpack(value))
+                inst[resolvedProp] = Vector3.new(table.unpack(value))
             elseif type(value) == "table" and value.X and type(value.X) == "number" then
                 -- Object format fallback: {X=1, Y=2, Z=3}
-                inst[prop] = Vector3.new(value.X, value.Y or 0, value.Z or 0)
+                inst[resolvedProp] = Vector3.new(value.X, value.Y or 0, value.Z or 0)
             end
 
         -- Color3
-        elseif prop == "Color" then
+        elseif resolvedProp == "Color" or resolvedProp:match("Color3$") then
             if type(value) == "table" and #value == 3 then
-                inst[prop] = Color3.fromRGB(table.unpack(value))
+                inst[resolvedProp] = Color3.fromRGB(table.unpack(value))
             end
 
         -- CFrame — three input formats
-        elseif prop == "CFrame" then
+        elseif resolvedProp == "CFrame" then
             if type(value) == "table" then
                 if value.position then
                     -- Object format: {position:[x,y,z], rotation:[rx,ry,rz]}
                     local pos = Vector3.new(table.unpack(value.position))
                     local rot = value.rotation or {0, 0, 0}
-                    inst[prop] = CFrame.new(pos)
+                    inst[resolvedProp] = CFrame.new(pos)
                         * CFrame.Angles(math.rad(rot[1]), math.rad(rot[2]), math.rad(rot[3]))
                 elseif #value == 12 then
                     -- Raw 12-component CFrame matrix
-                    inst[prop] = CFrame.new(table.unpack(value))
+                    inst[resolvedProp] = CFrame.new(table.unpack(value))
                 elseif #value == 3 then
                     -- Position-only shorthand
-                    inst[prop] = CFrame.new(table.unpack(value))
+                    inst[resolvedProp] = CFrame.new(table.unpack(value))
                 end
             end
 
-        -- UDim2 — detected by VALUE SHAPE, not property name
-        -- Handles Size, Position, AnchorPoint on any GUI element
-        elseif type(value) == "table" and value.X and value.Y
-                and type(value.X) == "table" and type(value.Y) == "table" then
-            inst[prop] = UDim2.new(
-                value.X.Scale  or 0, value.X.Offset or 0,
-                value.Y.Scale  or 0, value.Y.Offset or 0
-            )
-
         -- BrickColor
-        elseif prop == "BrickColor" then
+        elseif resolvedProp == "BrickColor" then
             if type(value) == "string" then
-                inst[prop] = BrickColor.new(value)
+                inst[resolvedProp] = BrickColor.new(value)
             end
 
         -- Generic Enum handler — works for Material, Shape, FormFactor,
         -- SurfaceType, TopSurface, BottomSurface, Style, Font, and any other
         elseif type(value) == "string" then
-            local enumOk, enumType = pcall(function() return Enum[prop] end)
+            local enumOk, enumType = pcall(function() return Enum[resolvedProp] end)
             if enumOk and enumType then
                 local valOk, enumVal = pcall(function() return enumType[value] end)
                 if valOk and enumVal then
-                    inst[prop] = enumVal
+                    inst[resolvedProp] = enumVal
                 else
                     -- Enum lookup failed — fall through to plain assignment
-                    inst[prop] = value
+                    inst[resolvedProp] = value
                 end
             else
                 -- Not an enum — plain string assignment
-                inst[prop] = value
+                inst[resolvedProp] = value
             end
 
         -- Primitives (number, boolean)
         else
-            inst[prop] = value
+            inst[resolvedProp] = value
         end
     end)
 end
