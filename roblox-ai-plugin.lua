@@ -35,17 +35,47 @@ local Selection   = game:GetService("Selection")
 local URL_SETTING_KEY  = "RobloxAI_BackendURL"
 local DEFAULT_URL      = "http://localhost:3000"
 
-local function getBackendURL()
-    local url = plugin:GetSetting(URL_SETTING_KEY)
-    if not url or url == "" then
-        plugin:SetSetting(URL_SETTING_KEY, DEFAULT_URL)
-        return DEFAULT_URL
+local function normalizeBackendURL(url)
+    if type(url) ~= "string" then
+        return nil
     end
+
+    local normalized = url:match("^%s*(.-)%s*$")
+    if not normalized or normalized == "" then
+        return nil
+    end
+
+    normalized = normalized:gsub("/generate/*$", "")
+    normalized = normalized:gsub("/+$", "")
+
+    -- Railway public domains redirect HTTP to HTTPS. Roblox HTTP requests
+    -- can fail or behave inconsistently across redirects, so store the
+    -- canonical HTTPS URL directly.
+    normalized = normalized:gsub("^http://([%w%-]+%.up%.railway%.app)$", "https://%1")
+
+    return normalized ~= "" and normalized or nil
+end
+
+local function getBackendURL()
+    local savedUrl = plugin:GetSetting(URL_SETTING_KEY)
+    local url = normalizeBackendURL(savedUrl)
+
+    if not url then
+        url = normalizeBackendURL(DEFAULT_URL) or DEFAULT_URL
+    end
+
+    if savedUrl ~= url then
+        plugin:SetSetting(URL_SETTING_KEY, url)
+    end
+
     return url
 end
 
 local function saveBackendURL(url)
-    plugin:SetSetting(URL_SETTING_KEY, url)
+    local normalized = normalizeBackendURL(url)
+    if normalized then
+        plugin:SetSetting(URL_SETTING_KEY, normalized)
+    end
 end
 
 -- conversationId is unique per Studio session.
@@ -747,6 +777,12 @@ local function parseHttpError(errMsg)
     errMsg = tostring(errMsg)
     if errMsg:match("429")          then return "Rate limit hit.", "Wait a moment and try again." end
     if errMsg:match("401")          then return "Auth error.", "Check your AI API key on the backend." end
+    if errMsg:match("301") or errMsg:match("302") then
+        return "Endpoint redirected.", "Use the HTTPS base URL directly. Example: https://your-app.up.railway.app"
+    end
+    if errMsg:match("404")          then
+        return "Endpoint not found.", "Save only the base backend URL, without a trailing slash or /generate."
+    end
     if errMsg:match("503")          then return "AI provider is down.", "Try again in a few minutes." end
     if errMsg:match("ECONNREFUSED") then return "Backend unreachable.", "Check Backend URL in plugin settings." end
     if errMsg:match("timeout") or errMsg:match("ETIMEDOUT") then
@@ -821,10 +857,11 @@ local function doGenerate(promptText)
         and (ctx .. "\n\nRequest: " .. promptText:sub(1, 3800))
         or  promptText:sub(1, 4000)
     local targetParent = getCurrentTargetParent()
+    local requestBaseUrl = normalizeBackendURL(BACKEND_URL) or BACKEND_URL
 
     local ok, result = pcall(function()
         return HttpService:PostAsync(
-            BACKEND_URL .. "/generate",
+            requestBaseUrl .. "/generate",
             HttpService:JSONEncode({
                 prompt         = fullPrompt,
                 conversationId = conversationId,
@@ -901,9 +938,10 @@ end)
 
 -- ── Save URL button [B7] ──────────────────────────────────────
 saveUrlBtn.MouseButton1Click:Connect(function()
-    local newUrl = urlBox.Text:match("^%s*(.-)%s*$")  -- trim whitespace
-    if newUrl and newUrl ~= "" then
+    local newUrl = normalizeBackendURL(urlBox.Text)
+    if newUrl then
         BACKEND_URL = newUrl
+        urlBox.Text = newUrl
         saveBackendURL(newUrl)
         setStatus("Endpoint saved: " .. newUrl:sub(1, 50), C.green)
     else

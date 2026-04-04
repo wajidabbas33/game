@@ -80,7 +80,7 @@ const PROVIDER_CONFIG = {
         displayName: 'Qwen',
         keyName: 'QWEN_API_KEY',
         apiKey: process.env.QWEN_API_KEY,
-        model: process.env.QWEN_MODEL || 'qwen3.6-plus',
+        model: process.env.QWEN_MODEL || 'qwen3-coder-plus',
         baseURL: process.env.QWEN_BASE_URL || 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
         temperature: 0.7,
         maxTokenField: 'max_tokens',
@@ -89,7 +89,7 @@ const PROVIDER_CONFIG = {
         displayName: 'OpenAI',
         keyName: 'OPENAI_API_KEY',
         apiKey: process.env.OPENAI_API_KEY,
-        model: process.env.OPENAI_MODEL || 'gpt-4o',
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
         baseURL: process.env.OPENAI_BASE_URL || undefined,
         temperature: 0.7,
         maxTokenField: 'max_tokens',
@@ -116,7 +116,7 @@ app.use(express.json({ limit: '2mb' }));
 
 // ── Constants ────────────────────────────────────────────────
 const CONVERSATION_TTL  = 3_600_000;   // 1 hour
-const MAX_HISTORY_TURNS = 10;          // user+assistant pairs kept
+const MAX_HISTORY_TURNS = 6;           // user+assistant pairs kept
 const MAX_CONVERSATIONS = 500;         // hard memory cap
 
 const ALLOWED_PARENTS = new Set([
@@ -383,6 +383,59 @@ STRICT RULES
 9.  If you generate nested maps, use instances[].parent to keep
     the hierarchy organized and predictable.`;
 
+const FAST_SYSTEM_PROMPT = `You are an expert Roblox Luau developer embedded inside Roblox Studio.
+Return ONLY a single valid JSON object. No prose, no markdown, no code fences.
+
+Schema:
+{
+  "explanation": "short summary",
+  "complexity": "simple" | "moderate" | "complex",
+  "phases": ["Phase 1", "Phase 2"],
+  "currentPhase": 1,
+  "totalPhases": 1,
+  "instances": [
+    {
+      "className": "Part",
+      "parent": "Workspace",
+      "properties": {
+        "Name": "Example",
+        "Size": [4, 1, 4],
+        "Position": [0, 1, 0],
+        "Color": [255, 0, 0],
+        "Anchored": true,
+        "Material": "SmoothPlastic",
+        "CFrame": {"position": [0, 1, 0], "rotation": [0, 0, 0]}
+      }
+    }
+  ],
+  "scripts": [
+    {
+      "name": "ExampleScript",
+      "type": "Script",
+      "parent": "ServerScriptService",
+      "source": "-- Luau code here\\nlocal Players = game:GetService(\\"Players\\")"
+    }
+  ]
+}
+
+Type formats:
+- Vector3: [x, y, z]
+- Color3: [R, G, B]
+- CFrame: {"position":[x,y,z], "rotation":[rx,ry,rz]}
+- UDim2: {"X":{"Scale":s,"Offset":o}, "Y":{"Scale":s,"Offset":o}}
+- BrickColor: string
+- Enum: string
+- boolean, number, string: plain values
+
+Rules:
+- Return valid JSON only.
+- "type" must be Script | LocalScript | ModuleScript.
+- Script "parent" must be Workspace | ServerScriptService | StarterPlayerScripts | ReplicatedStorage | StarterGui.
+- Use game:GetService() inside Luau source.
+- When the user asks for a map or arena, generate instances, not only scripts.
+- For complex requests, use phases and return only the current phase.
+- Keep the response compact and avoid decorative extras unless explicitly requested.`;
+
 // ── [B1] JSON structure validator ────────────────────────────
 // Validates the AI response matches expected schema.
 // Does NOT validate Lua syntax — luaparse only handles Lua 5.1
@@ -496,14 +549,166 @@ function extractJsonText(rawText) {
     return withoutFences;
 }
 
-function buildCompletionRequest(messages) {
+function countKeywordHits(text, keywords) {
+    return keywords.reduce((count, keyword) => (
+        text.includes(keyword) ? count + 1 : count
+    ), 0);
+}
+
+function isContinuePrompt(prompt) {
+    const normalized = String(prompt || '').trim().toLowerCase();
+    return normalized === 'continue'
+        || normalized === 'next phase'
+        || normalized === 'continue next phase'
+        || normalized.startsWith('continue ');
+}
+
+function looksComplexPrompt(prompt) {
+    const text = String(prompt || '').toLowerCase();
+    const buildKeywords = [
+        'capture the flag', 'king of the hill', 'round', 'lobby',
+        'team', 'spawn', 'leaderboard', 'datastore', 'ui',
+        'wave', 'arena', 'base', 'flag', 'score',
+    ];
+
+    return text.length > 160 || countKeywordHits(text, buildKeywords) >= 4;
+}
+
+function shouldUseFastSystemPrompt(prompt) {
+    return isContinuePrompt(prompt) || !looksComplexPrompt(prompt);
+}
+
+function estimateMaxTokens(prompt) {
+    const text = String(prompt || '').toLowerCase();
+
+    if (isContinuePrompt(text)) {
+        return 800;
+    }
+
+    if (looksComplexPrompt(text)) {
+        return 1000;
+    }
+
+    if (text.length < 100) {
+        return 500;
+    }
+
+    return 700;
+}
+
+function buildPerformanceSystemMessage(prompt, session) {
+    if (isContinuePrompt(prompt) && session.lastResponse) {
+        const nextPhaseNumber = Math.min(
+            (session.lastResponse.currentPhase || 1) + 1,
+            session.lastResponse.totalPhases || 1
+        );
+        const nextPhaseLabel = session.lastResponse.phases?.[nextPhaseNumber - 1]
+            || `Phase ${nextPhaseNumber}`;
+
+        return [
+            'Latency-critical continuation mode.',
+            `Return only ${nextPhaseLabel}.`,
+            'Do not repeat previous phases or regenerate the map shell.',
+            'Reuse already-generated instance names whenever possible.',
+            'Keep the response compact: at most 8 instances and 2 scripts unless strictly necessary.',
+        ].join(' ');
+    }
+
+    if (looksComplexPrompt(prompt)) {
+        return [
+            'Latency-critical generation mode.',
+            'Return only the smallest viable next phase.',
+            'For map plus gameplay requests, phase 1 must be a simple blockout only.',
+            'Avoid decorative pieces and extra polish.',
+            'Keep the response compact: at most 10 instances and 2 scripts unless strictly necessary.',
+        ].join(' ');
+    }
+
+    return null;
+}
+
+function buildAssistantHistoryEntry(safe) {
+    const summary = {
+        explanation: safe.explanation,
+        complexity: safe.complexity,
+        currentPhase: safe.currentPhase,
+        totalPhases: safe.totalPhases,
+    };
+
+    if (Array.isArray(safe.phases) && safe.phases.length > 0) {
+        summary.phases = safe.phases.slice(0, 10);
+    }
+
+    if (Array.isArray(safe.instances) && safe.instances.length > 0) {
+        summary.instances = safe.instances.slice(0, 12).map(instance => ({
+            name: instance.properties?.Name || instance.className,
+            className: instance.className,
+            parent: instance.parent || 'Workspace',
+        }));
+    }
+
+    if (Array.isArray(safe.scripts) && safe.scripts.length > 0) {
+        summary.scripts = safe.scripts.slice(0, 6).map(script => ({
+            name: script.name,
+            type: script.type,
+            parent: script.parent,
+        }));
+    }
+
+    if (Array.isArray(safe.warnings) && safe.warnings.length > 0) {
+        summary.warnings = safe.warnings.slice(0, 5);
+    }
+
+    return JSON.stringify(summary);
+}
+
+function buildLastResponseState(safe) {
+    return {
+        currentPhase: safe.currentPhase || 1,
+        totalPhases: safe.totalPhases || 1,
+        phases: Array.isArray(safe.phases) ? safe.phases.slice(0, 10) : [],
+        generatedNames: Array.isArray(safe.instances)
+            ? safe.instances
+                .map(instance => instance.properties?.Name || instance.className)
+                .filter(Boolean)
+                .slice(0, 12)
+            : [],
+    };
+}
+
+function buildUserMessage(prompt, session) {
+    const trimmedPrompt = String(prompt || '').slice(0, 4000);
+
+    if (!isContinuePrompt(trimmedPrompt) || !session.lastResponse) {
+        return trimmedPrompt;
+    }
+
+    const nextPhaseNumber = Math.min(
+        (session.lastResponse.currentPhase || 1) + 1,
+        session.lastResponse.totalPhases || 1
+    );
+    const nextPhaseLabel = session.lastResponse.phases?.[nextPhaseNumber - 1]
+        || `Phase ${nextPhaseNumber}`;
+    const generatedNames = session.lastResponse.generatedNames?.length
+        ? session.lastResponse.generatedNames.join(', ')
+        : 'none recorded';
+
+    return [
+        `Continue with ${nextPhaseLabel}.`,
+        'Use the existing generated structure instead of rebuilding earlier phases.',
+        `Existing generated instance names: ${generatedNames}.`,
+        'Return only the assets and scripts needed for this phase.',
+    ].join(' ');
+}
+
+function buildCompletionRequest(messages, options = {}) {
     const request = {
         model: AI_MODEL,
         temperature: ACTIVE_PROVIDER.temperature,
         messages,
     };
 
-    request[ACTIVE_PROVIDER.maxTokenField] = 4096;
+    request[ACTIVE_PROVIDER.maxTokenField] = options.maxTokens || 1000;
 
     if (AI_PROVIDER === 'openai') {
         request.response_format = { type: 'json_object' };
@@ -576,11 +781,15 @@ app.post('/generate', apiLimiter, async (req, res) => {
     let session = conversations.get(conversationId) || {
         messages: [],
         lastAccessed: Date.now(),
+        lastResponse: null,
     };
     session.lastAccessed = Date.now();
 
+    const userMessage = buildUserMessage(prompt, session);
+    const historyLengthBeforeTurn = session.messages.length;
+
     // Append user message AFTER validation
-    session.messages.push({ role: 'user', content: prompt.slice(0, 4000) });
+    session.messages.push({ role: 'user', content: userMessage });
 
     // Trim to last N turns
     if (session.messages.length > MAX_HISTORY_TURNS * 2) {
@@ -588,12 +797,25 @@ app.post('/generate', apiLimiter, async (req, res) => {
     }
 
     try {
+        const performanceSystemMessage = buildPerformanceSystemMessage(prompt, session);
+        const systemPrompt = shouldUseFastSystemPrompt(prompt)
+            ? FAST_SYSTEM_PROMPT
+            : SYSTEM_PROMPT;
+        const messages = [
+            { role: 'system', content: systemPrompt },
+        ];
+
+        if (performanceSystemMessage) {
+            messages.push({ role: 'system', content: performanceSystemMessage });
+        }
+
+        messages.push(...session.messages);
+
         // [B3] Wrapped in retry with backoff
         const completion = await retryWithBackoff(() =>
-            aiClient.chat.completions.create(buildCompletionRequest([
-                { role: 'system', content: SYSTEM_PROMPT },
-                ...session.messages,
-            ]))
+            aiClient.chat.completions.create(buildCompletionRequest(messages, {
+                maxTokens: estimateMaxTokens(prompt),
+            }))
         );
 
         const responseMessage = completion.choices[0].message || {};
@@ -605,6 +827,7 @@ app.post('/generate', apiLimiter, async (req, res) => {
         try {
             parsed = JSON.parse(jsonText);
         } catch (_) {
+            session.messages = session.messages.slice(0, historyLengthBeforeTurn);
             console.error('AI returned unparseable JSON:\n', rawText.slice(0, 500));
             return res.status(502).json({
                 error: 'AI Response Parse Error',
@@ -616,6 +839,7 @@ app.post('/generate', apiLimiter, async (req, res) => {
         // [B1] JSON structure validation
         const validation = validateResponseStructure(parsed);
         if (!validation.valid) {
+            session.messages = session.messages.slice(0, historyLengthBeforeTurn);
             console.error('AI response failed structure validation:', validation.errors);
             return res.status(502).json({
                 error: 'Invalid AI Response Structure',
@@ -686,14 +910,16 @@ app.post('/generate', apiLimiter, async (req, res) => {
         // Store assistant reply in history
         session.messages.push({
             role: 'assistant',
-            content: rawText,
-            ...(responseMessage.reasoning_details ? { reasoning_details: responseMessage.reasoning_details } : {}),
+            content: buildAssistantHistoryEntry(safe),
         });
+        session.lastResponse = buildLastResponseState(safe);
         conversations.set(conversationId, session);
 
         return res.json(safe);
 
     } catch (err) {
+        session.messages = session.messages.slice(0, historyLengthBeforeTurn);
+
         // [B2] Structured, actionable error messages
         console.error(`${AI_PROVIDER} error after retries:`, err);
 
@@ -735,6 +961,16 @@ app.post('/generate', apiLimiter, async (req, res) => {
 });
 
 // ── GET /health ──────────────────────────────────────────────
+app.get('/', (_req, res) => {
+    res.json({
+        status: 'ok',
+        message: 'Roblox AI backend is running. Use POST /generate or GET /health.',
+        provider: AI_PROVIDER,
+        model: AI_MODEL,
+        timestamp: new Date().toISOString(),
+    });
+});
+
 app.get('/health', (_req, res) => {
     res.json({
         status:    'ok',
