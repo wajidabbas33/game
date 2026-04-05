@@ -154,8 +154,37 @@ async function runTests() {
         assert(false, `Dynamic map + system generation failed: ${e.message}`);
     }
 
-    // Test 6: JSON Structure Validation
-    console.log('\n📋 Test 6: Response Structure Validation');
+    // Test 6: Terrain Generation
+    console.log('\n📋 Test 6: Terrain Generation');
+    try {
+        const res = await makeRequest('POST', '/generate', {
+            prompt: 'Create grassy hills terrain with a river and no scripts',
+            conversationId: 'test-terrain-' + Date.now()
+        });
+
+        assert(res.status === 200, 'Returns 200 for terrain request');
+        assert(Array.isArray(res.body.terrain), 'Response has terrain array');
+        assert(res.body.terrain.length > 0, 'Generated at least one terrain operation');
+        assert(
+            res.body.terrain.every(op => ['Block', 'Ball', 'Cylinder'].includes(op.shape)),
+            'Terrain operations use supported shapes'
+        );
+        assert(
+            res.body.terrain.every(op => typeof op.material === 'string' && op.material.length > 0),
+            'Terrain operations include materials'
+        );
+        assert(
+            Array.isArray(res.body.scripts) && res.body.scripts.length === 0,
+            'No scripts are generated when prompt says no scripts'
+        );
+        console.log(`  📝 Explanation: ${res.body.explanation}`);
+        console.log(`  🌍 Terrain ops: ${res.body.terrain.length}`);
+    } catch (e) {
+        assert(false, `Terrain generation failed: ${e.message}`);
+    }
+
+    // Test 7: JSON Structure Validation
+    console.log('\n📋 Test 7: Response Structure Validation');
     try {
         const res = await makeRequest('POST', '/generate', {
             prompt: 'Create a simple part',
@@ -185,13 +214,23 @@ async function runTests() {
                     assert(inst.properties, 'Instance has properties');
                 }
             }
+
+            if (res.body.terrain) {
+                assert(Array.isArray(res.body.terrain), 'Terrain is an array');
+                if (res.body.terrain.length > 0) {
+                    const op = res.body.terrain[0];
+                    assert(op.shape, 'Terrain operation has shape');
+                    assert(op.material, 'Terrain operation has material');
+                    assert(Array.isArray(op.position), 'Terrain operation has position');
+                }
+            }
         }
     } catch (e) {
         assert(false, `Structure validation test failed: ${e.message}`);
     }
 
-    // Test 7: Conversation Context
-    console.log('\n📋 Test 7: Conversation Context Preservation');
+    // Test 8: Conversation Context
+    console.log('\n📋 Test 8: Conversation Context Preservation');
     try {
         const convId = 'test-context-' + Date.now();
         
@@ -215,8 +254,8 @@ async function runTests() {
         assert(false, `Context preservation test failed: ${e.message}`);
     }
 
-    // Test 8: Cross-Reference Validation
-    console.log('\n📋 Test 8: Cross-Reference Validation');
+    // Test 9: Cross-Reference Validation
+    console.log('\n📋 Test 9: Cross-Reference Validation');
     try {
         const res = await makeRequest('POST', '/generate', {
             prompt: 'Create a script that references workspace.MyPart but dont create MyPart',
@@ -233,8 +272,8 @@ async function runTests() {
         assert(false, `Cross-reference test failed: ${e.message}`);
     }
 
-    // Test 9: Error Handling (Invalid Conversation ID)
-    console.log('\n📋 Test 9: Error Handling');
+    // Test 10: Error Handling (Invalid Conversation ID)
+    console.log('\n📋 Test 10: Error Handling');
     try {
         const res = await makeRequest('POST', '/generate', {
             prompt: 'Create a part'
@@ -247,8 +286,8 @@ async function runTests() {
         assert(false, `Error handling test failed: ${e.message}`);
     }
 
-    // Test 10: Rate Limiting (IP-based)
-    console.log('\n📋 Test 10: Rate Limiting (IP-based protection)');
+    // Test 11: Rate Limiting (IP-based)
+    console.log('\n📋 Test 11: Rate Limiting (IP-based protection)');
     try {
         const convId = 'test-ratelimit-' + Date.now();
         let rateLimited = false;

@@ -124,6 +124,7 @@ const ALLOWED_PARENTS = new Set([
     'StarterPlayerScripts', 'ReplicatedStorage', 'StarterGui',
 ]);
 const ALLOWED_SCRIPT_TYPES = new Set(['Script', 'LocalScript', 'ModuleScript']);
+const ALLOWED_TERRAIN_SHAPES = new Set(['Block', 'Ball', 'Cylinder']);
 
 // ── Conversation store ───────────────────────────────────────
 const conversations = new Map();
@@ -200,6 +201,22 @@ Return ONLY a single valid JSON object. No prose, no markdown, no code fences.
     }
   ],
 
+  "terrain": [
+    {
+      "shape":    "Block",
+      "material": "Grass",
+      "position": [0, 6, 0],
+      "size":     [96, 12, 96],
+      "rotation": [0, 0, 0]
+    },
+    {
+      "shape":    "Ball",
+      "material": "Rock",
+      "position": [0, 18, 0],
+      "radius":   22
+    }
+  ],
+
   "scripts": [
     {
       "name":   "KillBrickHandler",
@@ -222,6 +239,9 @@ Enum      → string value name               e.g. "Material": "SmoothPlastic"
 boolean   → true / false
 number    → plain number
 string    → plain string
+Terrain Block    → {"shape":"Block","material":"Grass","position":[x,y,z],"size":[x,y,z],"rotation":[rx,ry,rz]}
+Terrain Ball     → {"shape":"Ball","material":"Rock","position":[x,y,z],"radius":number}
+Terrain Cylinder → {"shape":"Cylinder","material":"Sand","position":[x,y,z],"radius":number,"height":number,"rotation":[rx,ry,rz]}
 
 ════════════════════════════════════════════════════════════
 TASK COMPLEXITY RULES
@@ -349,6 +369,27 @@ Recommended map patterns:
   • Classroom/interior → container model, floor, 4 walls, ceiling, windows, front board, desk rows
 
 ════════════════════════════════════════════════════════════
+TERRAIN GENERATION RULES
+════════════════════════════════════════════════════════════
+When the user explicitly asks for terrain, hills, cliffs, rivers, caves,
+islands, mountains, or natural landforms, use the "terrain" array in addition
+to or instead of parts/models.
+
+Terrain rules:
+  • Use "terrain" for natural surfaces and landforms. Use "instances" for buildings, props, spawns, and precise gameplay markers.
+  • Prefer a small number of large terrain operations over many tiny fragments.
+  • Use shape "Block" for plateaus, ramps, river cuts, and flat ground.
+  • Use shape "Ball" for hills, mounds, craters, and rounded landforms.
+  • Use shape "Cylinder" for vertical shafts, cliffs, pillars, and tunnels.
+  • Use material names from Roblox terrain materials such as Grass, Ground, Rock, Sand, Mud, Snow, Slate, Water, or Air.
+  • Use material "Air" to carve or clear terrain volumes when needed.
+  • Always provide "position". Provide "rotation" for Block/Cylinder when tilt or direction matters.
+  • If the user asks for both terrain and gameplay, prefer phases:
+      Phase 1: Base terrain / landforms
+      Phase 2: Structures, spawns, and objectives
+      Phase 3: Scripts, UI, and polish
+
+════════════════════════════════════════════════════════════
 ADVANCED LOGIC + OPTIMIZATION
 ════════════════════════════════════════════════════════════
 1. Prefer server-authoritative logic for rounds, scoring, captures, and wave state.
@@ -408,6 +449,15 @@ Schema:
       }
     }
   ],
+  "terrain": [
+    {
+      "shape": "Block",
+      "material": "Grass",
+      "position": [0, 6, 0],
+      "size": [64, 12, 64],
+      "rotation": [0, 0, 0]
+    }
+  ],
   "scripts": [
     {
       "name": "ExampleScript",
@@ -423,6 +473,9 @@ Type formats:
 - Color3: [R, G, B]
 - CFrame: {"position":[x,y,z], "rotation":[rx,ry,rz]}
 - UDim2: {"X":{"Scale":s,"Offset":o}, "Y":{"Scale":s,"Offset":o}}
+- Terrain Block: {"shape":"Block","material":"Grass","position":[x,y,z],"size":[x,y,z],"rotation":[rx,ry,rz]}
+- Terrain Ball: {"shape":"Ball","material":"Rock","position":[x,y,z],"radius":number}
+- Terrain Cylinder: {"shape":"Cylinder","material":"Sand","position":[x,y,z],"radius":number,"height":number,"rotation":[rx,ry,rz]}
 - BrickColor: string
 - Enum: string
 - boolean, number, string: plain values
@@ -433,6 +486,7 @@ Rules:
 - Script "parent" must be Workspace | ServerScriptService | StarterPlayerScripts | ReplicatedStorage | StarterGui.
 - Use game:GetService() inside Luau source.
 - When the user asks for a map or arena, generate instances, not only scripts.
+- When the user asks for natural landforms or terrain, generate "terrain" operations, not just Parts.
 - For complex requests, use phases and return only the current phase.
 - Keep the response compact and avoid decorative extras unless explicitly requested.`;
 
@@ -477,6 +531,52 @@ function validateResponseStructure(data) {
                 if (!inst.properties || typeof inst.properties !== 'object') errors.push(`instances[${i}].properties must be an object`);
                 if (inst.parent !== undefined && typeof inst.parent !== 'string') {
                     errors.push(`instances[${i}].parent must be a string when provided`);
+                }
+            });
+        }
+    }
+
+    const isFiniteTriple = value => Boolean(sanitizeNumericArray(value, [3]));
+
+    // terrain validation
+    if (data.terrain !== undefined) {
+        if (!Array.isArray(data.terrain)) {
+            errors.push('terrain must be an array');
+        } else {
+            data.terrain.forEach((op, i) => {
+                if (!op || typeof op !== 'object' || Array.isArray(op)) {
+                    errors.push(`terrain[${i}] must be an object`);
+                    return;
+                }
+
+                if (!ALLOWED_TERRAIN_SHAPES.has(op.shape)) {
+                    errors.push(`terrain[${i}].shape must be one of ${[...ALLOWED_TERRAIN_SHAPES].join(', ')}, got: ${op.shape}`);
+                }
+                if (typeof op.material !== 'string' || op.material.trim() === '') {
+                    errors.push(`terrain[${i}].material must be a non-empty string`);
+                }
+                if (!isFiniteTriple(op.position)) {
+                    errors.push(`terrain[${i}].position must be a finite [x, y, z] array`);
+                }
+                if (op.rotation !== undefined && !isFiniteTriple(op.rotation)) {
+                    errors.push(`terrain[${i}].rotation must be a finite [rx, ry, rz] array when provided`);
+                }
+
+                if (op.shape === 'Block') {
+                    if (!isFiniteTriple(op.size) || op.size.some(entry => entry <= 0)) {
+                        errors.push(`terrain[${i}].size must be a positive [x, y, z] array for Block terrain`);
+                    }
+                } else if (op.shape === 'Ball') {
+                    if (typeof op.radius !== 'number' || !Number.isFinite(op.radius) || op.radius <= 0) {
+                        errors.push(`terrain[${i}].radius must be a positive finite number for Ball terrain`);
+                    }
+                } else if (op.shape === 'Cylinder') {
+                    if (typeof op.radius !== 'number' || !Number.isFinite(op.radius) || op.radius <= 0) {
+                        errors.push(`terrain[${i}].radius must be a positive finite number for Cylinder terrain`);
+                    }
+                    if (typeof op.height !== 'number' || !Number.isFinite(op.height) || op.height <= 0) {
+                        errors.push(`terrain[${i}].height must be a positive finite number for Cylinder terrain`);
+                    }
                 }
             });
         }
@@ -726,7 +826,8 @@ function looksComplexPrompt(prompt) {
         'team', 'spawn', 'leaderboard', 'datastore', 'ui',
         'wave', 'waves', 'survival', 'npc', 'enemy', 'enemies',
         'arena', 'base', 'flag', 'score', 'timer',
-        'polish', 'hud', 'manager', 'system',
+        'polish', 'hud', 'manager', 'system', 'terrain',
+        'hill', 'mountain', 'river', 'island', 'cliff',
     ];
     const isSystemHeavyPrompt = /\b(survival|waves?|npc|enemy|enemies|capture the flag|king of the hill|leaderboard|datastore)\b/.test(text)
         && /\b(system|manager|spawn|timer|team|score|round|ai)\b/.test(text);
@@ -818,6 +919,14 @@ function buildAssistantHistoryEntry(safe) {
         }));
     }
 
+    if (Array.isArray(safe.terrain) && safe.terrain.length > 0) {
+        summary.terrain = safe.terrain.slice(0, 8).map(operation => ({
+            shape: operation.shape,
+            material: operation.material,
+            position: operation.position,
+        }));
+    }
+
     if (Array.isArray(safe.scripts) && safe.scripts.length > 0) {
         summary.scripts = safe.scripts.slice(0, 6).map(script => ({
             name: script.name,
@@ -844,6 +953,7 @@ function buildLastResponseState(safe) {
                 .filter(Boolean)
                 .slice(0, 12)
             : [],
+        terrainOperationCount: Array.isArray(safe.terrain) ? safe.terrain.length : 0,
     };
 }
 
@@ -978,8 +1088,82 @@ function sanitizePropertyValue(key, value) {
     return sanitizeUDim2Value(value);
 }
 
+function sanitizeTerrainMaterial(value) {
+    if (typeof value !== 'string') {
+        return undefined;
+    }
+
+    const trimmed = value.trim();
+    return trimmed ? trimmed.slice(0, 64) : undefined;
+}
+
+function sanitizeTerrainOperation(operation) {
+    if (!operation || typeof operation !== 'object' || Array.isArray(operation)) {
+        return undefined;
+    }
+
+    const shape = typeof operation.shape === 'string'
+        ? operation.shape.trim()
+        : '';
+    const canonicalShape = shape ? `${shape.charAt(0).toUpperCase()}${shape.slice(1).toLowerCase()}` : '';
+    const position = sanitizeNumericArray(operation.position, [3]);
+    const material = sanitizeTerrainMaterial(operation.material);
+
+    if (!ALLOWED_TERRAIN_SHAPES.has(canonicalShape) || !position || !material) {
+        return undefined;
+    }
+
+    const safe = {
+        shape: canonicalShape,
+        material,
+        position,
+    };
+
+    if (operation.rotation !== undefined) {
+        const rotation = sanitizeNumericArray(operation.rotation, [3]);
+        if (rotation) {
+            safe.rotation = rotation;
+        }
+    }
+
+    if (canonicalShape === 'Block') {
+        const size = sanitizeNumericArray(operation.size, [3]);
+        if (!size || size.some(entry => entry <= 0)) {
+            return undefined;
+        }
+        safe.size = size;
+    } else if (canonicalShape === 'Ball') {
+        if (typeof operation.radius !== 'number' || !Number.isFinite(operation.radius) || operation.radius <= 0) {
+            return undefined;
+        }
+        safe.radius = Math.abs(operation.radius);
+    } else if (canonicalShape === 'Cylinder') {
+        if (typeof operation.radius !== 'number' || !Number.isFinite(operation.radius) || operation.radius <= 0) {
+            return undefined;
+        }
+        if (typeof operation.height !== 'number' || !Number.isFinite(operation.height) || operation.height <= 0) {
+            return undefined;
+        }
+        safe.radius = Math.abs(operation.radius);
+        safe.height = Math.abs(operation.height);
+    }
+
+    return safe;
+}
+
 function wantsNoScripts(prompt) {
     return /\b(?:no|without)\s+scripts?\b/i.test(String(prompt || ''));
+}
+
+function looksLikeTerrainPrompt(prompt) {
+    const text = String(prompt || '').toLowerCase();
+    const terrainKeywords = [
+        'terrain', 'hill', 'hills', 'mountain', 'mountains', 'cliff', 'cliffs',
+        'river', 'lake', 'waterfall', 'canyon', 'valley', 'island', 'shore',
+        'cave', 'plateau', 'crater', 'grassland', 'sand dune', 'snowfield',
+    ];
+
+    return countKeywordHits(text, terrainKeywords) >= 1;
 }
 
 function looksLikeMapLayoutPrompt(prompt) {
@@ -990,6 +1174,101 @@ function looksLikeMapLayoutPrompt(prompt) {
     ];
 
     return countKeywordHits(text, mapKeywords) >= 3;
+}
+
+function buildTerrainFallback(prompt) {
+    if (!looksLikeTerrainPrompt(prompt)) {
+        return null;
+    }
+
+    const text = String(prompt || '').toLowerCase();
+    const noScripts = wantsNoScripts(prompt);
+    const phases = noScripts ? [] : [
+        'Phase 1: Create the terrain shell and landforms',
+        'Phase 2: Add structures, spawns, and gameplay markers',
+        'Phase 3: Add scripts, NPCs, and polish',
+    ];
+
+    const terrain = [];
+    const instances = [];
+    const baseMaterial = text.includes('snow')
+        ? 'Snow'
+        : text.includes('sand') || text.includes('desert')
+            ? 'Sand'
+            : 'Grass';
+
+    terrain.push({
+        shape: 'Block',
+        material: baseMaterial,
+        position: [0, 6, 0],
+        size: text.includes('island') ? [96, 12, 96] : [128, 12, 128],
+        rotation: [0, 0, 0],
+    });
+
+    if (text.includes('hill') || text.includes('mountain') || text.includes('cliff')) {
+        terrain.push({
+            shape: 'Ball',
+            material: 'Rock',
+            position: [0, 28, 0],
+            radius: text.includes('mountain') ? 34 : 22,
+        });
+    }
+
+    if (text.includes('river') || text.includes('lake') || text.includes('water')) {
+        terrain.push({
+            shape: 'Block',
+            material: 'Water',
+            position: [0, 4, 0],
+            size: text.includes('lake') ? [36, 6, 36] : [18, 6, 96],
+            rotation: [0, 0, 0],
+        });
+    }
+
+    if (text.includes('canyon') || text.includes('crater') || text.includes('valley')) {
+        terrain.push({
+            shape: 'Ball',
+            material: 'Air',
+            position: [0, 12, 0],
+            radius: text.includes('canyon') ? 26 : 18,
+        });
+    }
+
+    if (text.includes('island')) {
+        terrain.push({
+            shape: 'Block',
+            material: 'Water',
+            position: [0, 1, 0],
+            size: [180, 4, 180],
+            rotation: [0, 0, 0],
+        });
+    }
+
+    instances.push({
+        className: 'Part',
+        parent: 'Workspace',
+        properties: {
+            Name: 'PlayerSpawn',
+            Size: [8, 1, 8],
+            Position: [0, 14, 0],
+            Color: [103, 192, 128],
+            Anchored: true,
+            Material: 'SmoothPlastic',
+            Transparency: 0.35,
+        },
+    });
+
+    return {
+        explanation: noScripts
+            ? 'Created a terrain blockout preview.'
+            : "Created the terrain shell for phase 1. Reply 'continue' for phase 2.",
+        complexity: noScripts ? 'moderate' : 'complex',
+        phases,
+        currentPhase: 1,
+        totalPhases: noScripts ? 1 : phases.length,
+        terrain,
+        instances,
+        scripts: [],
+    };
 }
 
 function buildMapLayoutFallback(prompt) {
@@ -1216,11 +1495,15 @@ function buildMapLayoutFallback(prompt) {
 }
 
 function buildDeterministicFallback(prompt) {
-    return buildMapLayoutFallback(prompt);
+    return buildTerrainFallback(prompt) || buildMapLayoutFallback(prompt);
 }
 
 function shouldUseDeterministicLayoutPreview(prompt) {
     return wantsNoScripts(prompt) && looksLikeMapLayoutPrompt(prompt);
+}
+
+function shouldUseDeterministicTerrainPreview(prompt) {
+    return wantsNoScripts(prompt) && looksLikeTerrainPrompt(prompt);
 }
 
 function withTimeout(promise, timeoutMs, code = 'AI_TIMEOUT') {
@@ -1365,6 +1648,29 @@ function normalizeScriptShape(script) {
     return normalized;
 }
 
+function normalizeTerrainOperationShape(operation) {
+    if (!operation || typeof operation !== 'object' || Array.isArray(operation)) {
+        return operation;
+    }
+
+    const normalized = { ...operation };
+
+    if (!normalized.shape && typeof normalized.type === 'string') {
+        normalized.shape = normalized.type;
+    }
+    if (!normalized.position && Array.isArray(normalized.center)) {
+        normalized.position = normalized.center;
+    }
+    if (!normalized.position && normalized.cframe && Array.isArray(normalized.cframe.position)) {
+        normalized.position = normalized.cframe.position;
+    }
+    if (!normalized.rotation && normalized.cframe && Array.isArray(normalized.cframe.rotation)) {
+        normalized.rotation = normalized.cframe.rotation;
+    }
+
+    return normalized;
+}
+
 function normalizeParsedResponseShape(data) {
     if (!data || typeof data !== 'object' || Array.isArray(data)) {
         return data;
@@ -1378,6 +1684,10 @@ function normalizeParsedResponseShape(data) {
 
     if (Array.isArray(normalized.scripts)) {
         normalized.scripts = normalized.scripts.map(normalizeScriptShape);
+    }
+
+    if (Array.isArray(normalized.terrain)) {
+        normalized.terrain = normalized.terrain.map(normalizeTerrainOperationShape);
     }
 
     return normalized;
@@ -1538,6 +1848,9 @@ app.post('/generate', apiLimiter, async (req, res) => {
         if (shouldUseDeterministicLayoutPreview(prompt)) {
             parsed = buildMapLayoutFallback(prompt);
             console.warn('Used deterministic layout preview shortcut.');
+        } else if (shouldUseDeterministicTerrainPreview(prompt)) {
+            parsed = buildTerrainFallback(prompt);
+            console.warn('Used deterministic terrain preview shortcut.');
         } else {
             let completion;
             try {
@@ -1675,6 +1988,12 @@ app.post('/generate', apiLimiter, async (req, res) => {
                     }
                     return safeInst;
                 });
+        }
+
+        if (Array.isArray(parsed.terrain)) {
+            safe.terrain = parsed.terrain
+                .map(sanitizeTerrainOperation)
+                .filter(Boolean);
         }
 
         if (Array.isArray(parsed.scripts)) {

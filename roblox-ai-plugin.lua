@@ -84,7 +84,8 @@ local BACKEND_URL    = getBackendURL()
 local conversationId = HttpService:GenerateGUID(false)
 
 -- ── Undo stack ────────────────────────────────────────────────
--- Each entry = list of Instances created in one generation turn.
+-- Each entry = instances created in one generation turn plus metadata
+-- about terrain operations, which currently are not reversible.
 local undoStack = {}
 
 -- ── Plugin toolbar ────────────────────────────────────────────
@@ -588,12 +589,14 @@ end
 local function buildPreviewSummary(data, targetParent)
     local instanceCount = type(data.instances) == "table" and #data.instances or 0
     local scriptCount   = type(data.scripts) == "table" and #data.scripts or 0
+    local terrainCount  = type(data.terrain) == "table" and #data.terrain or 0
     local lines = {
         string.format(
-            "Preview ready for %s: %d instance(s), %d script(s).",
+            "Preview ready for %s: %d instance(s), %d script(s), %d terrain op(s).",
             getTargetLabel(targetParent),
             instanceCount,
-            scriptCount
+            scriptCount,
+            terrainCount
         )
     }
 
@@ -621,6 +624,21 @@ local function buildPreviewSummary(data, targetParent)
         end
         if scriptCount > 4 then
             lines[#lines + 1] = string.format("• ...and %d more script(s)", scriptCount - 4)
+        end
+    end
+
+    if terrainCount > 0 then
+        lines[#lines + 1] = "Terrain:"
+        for i = 1, math.min(terrainCount, 4) do
+            local op = data.terrain[i]
+            lines[#lines + 1] = string.format(
+                "• %s %s",
+                tostring(op.shape or "Terrain"),
+                tostring(op.material or "Material")
+            )
+        end
+        if terrainCount > 4 then
+            lines[#lines + 1] = string.format("• ...and %d more terrain operation(s)", terrainCount - 4)
         end
     end
 
@@ -665,6 +683,49 @@ local function formatColor(value)
     )
 end
 
+local function formatTerrainOperation(op)
+    if type(op) ~= "table" then
+        return nil
+    end
+
+    local shape = tostring(op.shape or "Terrain")
+    local material = tostring(op.material or "Material")
+    local position = formatTriple(op.position)
+
+    if shape == "Block" then
+        return string.format(
+            "%s %s at %s size %s",
+            material,
+            shape,
+            position or "(?, ?, ?)",
+            formatTriple(op.size) or "(?, ?, ?)"
+        )
+    end
+
+    if shape == "Ball" then
+        return string.format(
+            "%s %s at %s radius %s",
+            material,
+            shape,
+            position or "(?, ?, ?)",
+            formatNumber(op.radius)
+        )
+    end
+
+    if shape == "Cylinder" then
+        return string.format(
+            "%s %s at %s radius %s height %s",
+            material,
+            shape,
+            position or "(?, ?, ?)",
+            formatNumber(op.radius),
+            formatNumber(op.height)
+        )
+    end
+
+    return string.format("%s %s", material, shape)
+end
+
 local function getPreviewParentName(instData, targetParent)
     local parentName = instData and instData.parent
     if type(parentName) ~= "string" or parentName == "" or parentName == "Selection" then
@@ -706,7 +767,11 @@ end
 
 local function build3DOutputText(data, targetParent, applied)
     local instances = type(data.instances) == "table" and data.instances or nil
-    if not instances or #instances == 0 then
+    local terrainOps = type(data.terrain) == "table" and data.terrain or nil
+    local hasInstances = instances and #instances > 0
+    local hasTerrain = terrainOps and #terrainOps > 0
+
+    if not hasInstances and not hasTerrain then
         return nil
     end
 
@@ -716,48 +781,62 @@ local function build3DOutputText(data, targetParent, applied)
         "",
     }
 
-    local limit = math.min(#instances, 30)
-    for i = 1, limit do
-        local instData = instances[i]
-        local props = instData.properties or {}
-        lines[#lines + 1] = string.format(
-            "[%d] %s (%s)",
-            i,
-            tostring(props.Name or instData.className),
-            tostring(instData.className)
-        )
-        lines[#lines + 1] = "Parent: " .. getPreviewParentName(instData, targetParent)
+    if hasInstances then
+        local limit = math.min(#instances, 30)
+        for i = 1, limit do
+            local instData = instances[i]
+            local props = instData.properties or {}
+            lines[#lines + 1] = string.format(
+                "[%d] %s (%s)",
+                i,
+                tostring(props.Name or instData.className),
+                tostring(instData.className)
+            )
+            lines[#lines + 1] = "Parent: " .. getPreviewParentName(instData, targetParent)
 
-        local size = formatTriple(props.Size)
-        if size then
-            lines[#lines + 1] = "Size: " .. size
+            local size = formatTriple(props.Size)
+            if size then
+                lines[#lines + 1] = "Size: " .. size
+            end
+
+            local position = formatTriple(props.Position)
+            if not position and type(props.CFrame) == "table" then
+                position = formatTriple(props.CFrame.position)
+            end
+            if position then
+                lines[#lines + 1] = "Position: " .. position
+            end
+
+            local color = formatColor(props.Color)
+            if color then
+                lines[#lines + 1] = "Color: " .. color
+            end
+
+            if props.Material then
+                lines[#lines + 1] = "Material: " .. tostring(props.Material)
+            end
+            if props.Anchored ~= nil then
+                lines[#lines + 1] = "Anchored: " .. tostring(props.Anchored)
+            end
+
+            lines[#lines + 1] = ""
         end
 
-        local position = formatTriple(props.Position)
-        if not position and type(props.CFrame) == "table" then
-            position = formatTriple(props.CFrame.position)
+        if #instances > limit then
+            lines[#lines + 1] = string.format("...and %d more generated item(s)", #instances - limit)
+            lines[#lines + 1] = ""
         end
-        if position then
-            lines[#lines + 1] = "Position: " .. position
-        end
-
-        local color = formatColor(props.Color)
-        if color then
-            lines[#lines + 1] = "Color: " .. color
-        end
-
-        if props.Material then
-            lines[#lines + 1] = "Material: " .. tostring(props.Material)
-        end
-        if props.Anchored ~= nil then
-            lines[#lines + 1] = "Anchored: " .. tostring(props.Anchored)
-        end
-
-        lines[#lines + 1] = ""
     end
 
-    if #instances > limit then
-        lines[#lines + 1] = string.format("...and %d more generated item(s)", #instances - limit)
+    if hasTerrain then
+        lines[#lines + 1] = "Terrain operations:"
+        local terrainLimit = math.min(#terrainOps, 20)
+        for i = 1, terrainLimit do
+            lines[#lines + 1] = string.format("[T%d] %s", i, formatTerrainOperation(terrainOps[i]) or "Terrain op")
+        end
+        if #terrainOps > terrainLimit then
+            lines[#lines + 1] = string.format("...and %d more terrain operation(s)", #terrainOps - terrainLimit)
+        end
     end
 
     return table.concat(lines, "\n")
@@ -765,22 +844,28 @@ end
 
 local function buildArchitectureViewerText(data, targetParent, applied)
     local instances = type(data.instances) == "table" and data.instances or nil
-    if not instances or #instances == 0 then
+    local terrainOps = type(data.terrain) == "table" and data.terrain or nil
+    local hasInstances = instances and #instances > 0
+    local hasTerrain = terrainOps and #terrainOps > 0
+
+    if not hasInstances and not hasTerrain then
         return nil
     end
 
     local rootLabel = getTargetLabel(targetParent)
     local childrenByParent = {}
 
-    for i, instData in ipairs(instances) do
-        local props = instData.properties or {}
-        local nodeName = tostring(props.Name or (instData.className .. "_" .. tostring(i)))
-        local parentName = getPreviewParentName(instData, targetParent)
-        childrenByParent[parentName] = childrenByParent[parentName] or {}
-        table.insert(childrenByParent[parentName], {
-            name = nodeName,
-            className = tostring(instData.className),
-        })
+    if hasInstances then
+        for i, instData in ipairs(instances) do
+            local props = instData.properties or {}
+            local nodeName = tostring(props.Name or (instData.className .. "_" .. tostring(i)))
+            local parentName = getPreviewParentName(instData, targetParent)
+            childrenByParent[parentName] = childrenByParent[parentName] or {}
+            table.insert(childrenByParent[parentName], {
+                name = nodeName,
+                className = tostring(instData.className),
+            })
+        end
     end
 
     local lines = {
@@ -788,6 +873,17 @@ local function buildArchitectureViewerText(data, targetParent, applied)
         "",
         rootLabel,
     }
+
+    if hasTerrain then
+        lines[#lines + 1] = "└─ Terrain [" .. tostring(#terrainOps) .. " ops]"
+        for i, op in ipairs(terrainOps) do
+            lines[#lines + 1] = "   └─ " .. (formatTerrainOperation(op) or ("Terrain " .. tostring(i)))
+        end
+        if hasInstances then
+            lines[#lines + 1] = ""
+            lines[#lines + 1] = rootLabel
+        end
+    end
 
     local visited = {}
     local function renderTree(parentName, prefix)
@@ -827,6 +923,24 @@ local function setViewerContent(viewer, emptyLabel, text)
     emptyLabel.Visible = not hasText
 end
 
+local function combineWarnings(primary, secondary)
+    local combined = {}
+
+    if type(primary) == "table" then
+        for _, warning in ipairs(primary) do
+            combined[#combined + 1] = warning
+        end
+    end
+
+    if type(secondary) == "table" then
+        for _, warning in ipairs(secondary) do
+            combined[#combined + 1] = warning
+        end
+    end
+
+    return #combined > 0 and combined or nil
+end
+
 local activeViewerTab = "script"
 local viewerTabs = {
     script = {
@@ -862,6 +976,10 @@ end
 local function getPreferredViewerTab(data)
     if type(data.scripts) == "table" and #data.scripts > 0 then
         return "script"
+    end
+
+    if type(data.terrain) == "table" and #data.terrain > 0 then
+        return "output"
     end
 
     if type(data.instances) == "table" and #data.instances > 0 then
@@ -1077,11 +1195,78 @@ local function tryApplyProperty(inst, prop, value)
     end)
 end
 
+local function resolveEnumItem(enumName, valueName)
+    if type(valueName) ~= "string" then
+        return nil
+    end
+
+    local enumType = Enum[enumName]
+    if not enumType then
+        return nil
+    end
+
+    local direct = enumType[valueName]
+    if direct then
+        return direct
+    end
+
+    local normalizedTarget = valueName:gsub("[%s_%-]", ""):lower()
+    for _, item in ipairs(enumType:GetEnumItems()) do
+        if item.Name:gsub("[%s_%-]", ""):lower() == normalizedTarget then
+            return item
+        end
+    end
+
+    return nil
+end
+
+local function buildTerrainCFrame(op)
+    local position = Vector3.new(table.unpack(op.position))
+    local rotation = op.rotation or {0, 0, 0}
+    return CFrame.new(position)
+        * CFrame.Angles(math.rad(rotation[1] or 0), math.rad(rotation[2] or 0), math.rad(rotation[3] or 0))
+end
+
+local function applyTerrainOperation(terrain, op)
+    if type(op) ~= "table" or type(op.shape) ~= "string" or type(op.position) ~= "table" then
+        return false
+    end
+
+    local material = resolveEnumItem("Material", op.material) or Enum.Material.Grass
+    local ok = pcall(function()
+        if op.shape == "Block" and type(op.size) == "table" and #op.size == 3 then
+            terrain:FillBlock(
+                buildTerrainCFrame(op),
+                Vector3.new(table.unpack(op.size)),
+                material
+            )
+        elseif op.shape == "Ball" and type(op.radius) == "number" then
+            terrain:FillBall(
+                Vector3.new(table.unpack(op.position)),
+                op.radius,
+                material
+            )
+        elseif op.shape == "Cylinder" and type(op.radius) == "number" and type(op.height) == "number" then
+            terrain:FillCylinder(
+                buildTerrainCFrame(op),
+                op.height,
+                op.radius,
+                material
+            )
+        else
+            error("Unsupported terrain operation")
+        end
+    end)
+
+    return ok
+end
+
 -- ── applyChanges ──────────────────────────────────────────────
 -- `continue` is intentionally avoided for compatibility.
 -- All loop bodies use if/else guards instead.
 local function applyChanges(data, targetParent)
     local createdThisTurn = {}
+    local terrainOperationsApplied = 0
     local createParent = (targetParent and targetParent.Parent) and targetParent or game.Workspace
     local createdByName = {}
     local instanceEntries = {}
@@ -1128,6 +1313,17 @@ local function applyChanges(data, targetParent)
         entry.inst.Parent = resolveInstanceParent(entry.parent)
     end
 
+    if type(data.terrain) == "table" and #data.terrain > 0 then
+        local terrain = game.Workspace:FindFirstChildOfClass("Terrain") or game.Workspace.Terrain
+        if terrain then
+            for _, operation in ipairs(data.terrain) do
+                if applyTerrainOperation(terrain, operation) then
+                    terrainOperationsApplied += 1
+                end
+            end
+        end
+    end
+
     -- Create scripts
     if type(data.scripts) == "table" then
         for _, scriptData in ipairs(data.scripts) do
@@ -1150,11 +1346,18 @@ local function applyChanges(data, targetParent)
         end
     end
 
-    if #createdThisTurn > 0 then
-        table.insert(undoStack, createdThisTurn)
+    if #createdThisTurn > 0 or terrainOperationsApplied > 0 then
+        table.insert(undoStack, {
+            instances = createdThisTurn,
+            terrainOperations = terrainOperationsApplied,
+        })
     end
 
-    return #createdThisTurn
+    return {
+        createdInstances = #createdThisTurn,
+        terrainOperations = terrainOperationsApplied,
+        totalChanges = #createdThisTurn + terrainOperationsApplied,
+    }
 end
 
 -- ── [B2] HTTP error parser ────────────────────────────────────
@@ -1214,11 +1417,28 @@ local function applyPendingPreview()
     end
 
     local preview = pendingPreview
-    local count = applyChanges(preview.data, preview.targetParent)
-    setStatus(string.format("Applied %d change(s) from preview.", count), C.green)
+    local result = applyChanges(preview.data, preview.targetParent)
+    local extraWarnings = nil
+
+    if result.terrainOperations > 0 then
+        extraWarnings = {
+            "Terrain edits were applied to Workspace.Terrain and are not included in Undo Last Generation.",
+        }
+        setStatus(
+            string.format(
+                "Applied %d change(s), including %d terrain operation(s).",
+                result.totalChanges,
+                result.terrainOperations
+            ),
+            C.green
+        )
+    else
+        setStatus(string.format("Applied %d change(s) from preview.", result.totalChanges), C.green)
+    end
+
     showPreview(buildPreviewSummary(preview.data, preview.targetParent) .. "\nStatus: Applied to Studio.")
     showExplain(preview.data.explanation or "Done")
-    showWarnings(preview.data.warnings)
+    showWarnings(combineWarnings(preview.data.warnings, extraWarnings))
     updateDemoViewers(preview.data, preview.targetParent, true)
     promptBox.Text = ""
 
@@ -1282,7 +1502,11 @@ local function doGenerate(promptText)
                     local explanation = data.explanation or "Done"
                     local hasInstances = type(data.instances) == "table" and #data.instances > 0
                     local hasScripts   = type(data.scripts) == "table" and #data.scripts > 0
-                    local canApply     = hasInstances or hasScripts
+                    local hasTerrain   = type(data.terrain) == "table" and #data.terrain > 0
+                    local canApply     = hasInstances or hasScripts or hasTerrain
+                    local previewWarnings = hasTerrain and {
+                        "Terrain operations will edit Workspace.Terrain when applied. Undo Last Generation only removes created instances.",
+                    } or nil
 
                     if canApply then
                         pendingPreview = {
@@ -1299,7 +1523,7 @@ local function doGenerate(promptText)
                     end
 
                     showExplain(explanation)
-                    showWarnings(data.warnings)
+                    showWarnings(combineWarnings(data.warnings, previewWarnings))
                     updatePhaseUI(data)
                 end
             else
@@ -1373,14 +1597,29 @@ undoBtn.MouseButton1Click:Connect(function()
         return
     end
     local batch = table.remove(undoStack)
+    local instances = type(batch) == "table" and batch.instances or batch
+    local terrainOperations = type(batch) == "table" and batch.terrainOperations or 0
     local count = 0
-    for _, inst in ipairs(batch) do
+    for _, inst in ipairs(instances) do
         if inst and inst.Parent then
             inst:Destroy()
             count += 1
         end
     end
-    setStatus(string.format("Removed %d item(s) from the last generation.", count), C.subtext)
+
+    if terrainOperations > 0 then
+        setStatus(
+            string.format(
+                "Removed %d created item(s). %d terrain operation(s) from that generation cannot be undone automatically.",
+                count,
+                terrainOperations
+            ),
+            C.subtext
+        )
+    else
+        setStatus(string.format("Removed %d item(s) from the last generation.", count), C.subtext)
+    end
+
     clearInfoBoxes()
     continueBtn.Visible = false
 end)
