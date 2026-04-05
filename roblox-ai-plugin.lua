@@ -568,10 +568,22 @@ local function setApplyReady(ready)
     applyBtn.TextColor3 = ready and C.white or C.subtext
 end
 
+local function getApplyRoot(target)
+    if not target or not target.Parent then
+        return game.Workspace
+    end
+
+    if target:IsA("LuaSourceContainer") then
+        return target.Parent
+    end
+
+    return target
+end
+
 local function getCurrentTargetParent()
     local sel = Selection:Get()
     if #sel == 1 and sel[1] then
-        return sel[1]
+        return getApplyRoot(sel[1])
     end
     return game.Workspace
 end
@@ -584,6 +596,60 @@ local function getTargetLabel(target)
         return target:GetFullName()
     end)
     return ok and fullName or target.Name or "Workspace"
+end
+
+local function resolveServiceOrContainerPath(path)
+    if type(path) ~= "string" then
+        return nil
+    end
+
+    local trimmed = path:match("^%s*(.-)%s*$")
+    if not trimmed or trimmed == "" then
+        return nil
+    end
+
+    local aliases = {
+        workspace = "Workspace",
+        ["game.Workspace"] = "Workspace",
+        ["StarterPlayerScripts"] = "StarterPlayer.StarterPlayerScripts",
+        ["game.StarterPlayerScripts"] = "StarterPlayer.StarterPlayerScripts",
+        ["StarterCharacterScripts"] = "StarterPlayer.StarterCharacterScripts",
+        ["game.StarterCharacterScripts"] = "StarterPlayer.StarterCharacterScripts",
+        ["PlayerGui"] = "StarterGui",
+        ["game.PlayerGui"] = "StarterGui",
+        ["PlayerScripts"] = "StarterPlayer.StarterPlayerScripts",
+        ["game.PlayerScripts"] = "StarterPlayer.StarterPlayerScripts",
+    }
+
+    trimmed = aliases[trimmed] or trimmed
+
+    local current = nil
+    for segment in trimmed:gmatch("[^.]+") do
+        if segment == "game" then
+            current = game
+        elseif not current or current == game then
+            if segment == "Workspace" then
+                current = game.Workspace
+            else
+                local okService, service = pcall(function()
+                    return game:GetService(segment)
+                end)
+                if okService and service then
+                    current = service
+                else
+                    current = game:FindFirstChild(segment)
+                end
+            end
+        else
+            current = current:FindFirstChild(segment)
+        end
+
+        if not current then
+            return nil
+        end
+    end
+
+    return current ~= game and current or nil
 end
 
 local function buildPreviewSummary(data, targetParent)
@@ -1275,9 +1341,12 @@ local function applyChanges(data, targetParent)
         if type(parentName) ~= "string" or parentName == "" or parentName == "Selection" then
             return createParent
         end
-        if parentName == "Workspace" then
-            return game.Workspace
+
+        local explicitParent = resolveServiceOrContainerPath(parentName)
+        if explicitParent then
+            return explicitParent
         end
+
         return createdByName[parentName] or createParent
     end
 
