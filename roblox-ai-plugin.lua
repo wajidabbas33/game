@@ -177,7 +177,7 @@ end
 
 local function makeFrame(order, height, bg, parent)
     local f = Instance.new("Frame")
-    f.Size             = UDim2.new(1, 0, 0, height)
+    f.Size             = UDim2.new(1, -24, 0, height)
     f.BackgroundColor3 = bg or C.surface
     f.BorderSizePixel  = 0
     f.LayoutOrder      = order
@@ -188,7 +188,7 @@ end
 
 local function makeCard(order)
     local card = Instance.new("Frame")
-    card.Size = UDim2.new(1, 0, 0, 0)
+    card.Size = UDim2.new(1, -24, 0, 0)
     card.AutomaticSize = Enum.AutomaticSize.Y
     card.BackgroundColor3 = C.surface
     card.BorderSizePixel = 0
@@ -217,7 +217,7 @@ local function makeLabel(text, order, height, color, bold, wrap, parent, font, s
     lbl.Text              = text
     lbl.TextColor3        = color or C.white
     lbl.BackgroundTransparency = 1
-    lbl.Size              = UDim2.new(1, 0, 0, height or 20)
+    lbl.Size              = UDim2.new(1, -24, 0, height or 20)
     lbl.TextXAlignment    = Enum.TextXAlignment.Left
     lbl.TextYAlignment    = Enum.TextYAlignment.Top
     lbl.Font              = font or (bold and Enum.Font.GothamBold or Enum.Font.Gotham)
@@ -230,7 +230,7 @@ end
 
 local function makeButton(text, order, bg, height, parent)
     local btn = Instance.new("TextButton")
-    btn.Size             = UDim2.new(1, 0, 0, height or 34)
+    btn.Size             = UDim2.new(1, -24, 0, height or 34)
     btn.BackgroundColor3 = bg or C.accent
     btn.Text             = text
     btn.TextColor3       = C.white
@@ -253,7 +253,7 @@ end
 
 local function makeDivider(order, parent)
     local f = Instance.new("Frame")
-    f.Size             = UDim2.new(1, 0, 0, 1)
+    f.Size             = UDim2.new(1, -24, 0, 1)
     f.BackgroundColor3 = C.border
     f.BorderSizePixel  = 0
     f.LayoutOrder      = order
@@ -263,7 +263,7 @@ end
 
 local function makeInfoBox(order, bg, textColor, parent)
     local lbl = Instance.new("TextLabel")
-    lbl.Size             = UDim2.new(1, 0, 0, 0)
+    lbl.Size             = UDim2.new(1, -24, 0, 0)
     lbl.AutomaticSize    = Enum.AutomaticSize.Y
     lbl.BackgroundColor3 = bg or C.surface
     lbl.TextColor3       = textColor or C.white
@@ -296,7 +296,7 @@ local function makeViewerCard(order, title, description, emptyText, height)
     emptyLbl.Visible = true
 
     local viewer = Instance.new("TextBox")
-    viewer.Size             = UDim2.new(1, 0, 0, height or 180)
+    viewer.Size             = UDim2.new(1, -24, 0, height or 180)
     viewer.BackgroundColor3 = C.input
     viewer.TextColor3       = C.white
     viewer.Text             = ""
@@ -328,7 +328,7 @@ end
 
 local function makeTabButton(text, parent)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0.333, -4, 1, 0)
+    btn.Size = UDim2.new(0.25, -5, 1, 0)
     btn.BackgroundColor3 = C.surfaceAlt
     btn.Text = text
     btn.TextColor3 = C.subtext
@@ -350,7 +350,7 @@ makeLabel(
 )
 
 local flowFrame = Instance.new("Frame")
-flowFrame.Size = UDim2.new(1, 0, 0, 30)
+flowFrame.Size = UDim2.new(1, -24, 0, 30)
 flowFrame.BackgroundColor3 = C.accentSoft
 flowFrame.BorderSizePixel = 0
 flowFrame.LayoutOrder = 3
@@ -382,7 +382,7 @@ makeLabel(
 makeLabel("Backend Endpoint", 3, 16, C.muted, true, false, connectionCard, Enum.Font.GothamMedium, 12)
 
 local urlBox = Instance.new("TextBox")
-urlBox.Size             = UDim2.new(1, 0, 0, 36)
+urlBox.Size             = UDim2.new(1, -24, 0, 36)
 urlBox.BackgroundColor3 = C.input
 urlBox.TextColor3       = C.white
 urlBox.PlaceholderText  = "https://your-backend.up.railway.app"
@@ -412,7 +412,7 @@ makeLabel(
 )
 
 local selectionFrame = Instance.new("Frame")
-selectionFrame.Size = UDim2.new(1, 0, 0, 28)
+selectionFrame.Size = UDim2.new(1, -24, 0, 28)
 selectionFrame.BackgroundColor3 = C.surfaceAlt
 selectionFrame.BorderSizePixel = 0
 selectionFrame.LayoutOrder = 3
@@ -439,7 +439,7 @@ makeLabel("Prompt", 4, 16, C.muted, true, false, buildCard, Enum.Font.GothamMedi
 makeLabel("Example: Create a round-based game with a timer, teams, and a spawn system", 5, 16, C.subtext, false, false, buildCard, Enum.Font.Gotham, 11)
 
 local promptBox = Instance.new("TextBox")
-promptBox.Size             = UDim2.new(1, 0, 0, 112)
+promptBox.Size             = UDim2.new(1, -24, 0, 112)
 promptBox.BackgroundColor3 = C.input
 promptBox.TextColor3       = C.white
 promptBox.PlaceholderText  = 'Describe what to build, for example: "Add a leaderboard with kills and deaths"'
@@ -469,7 +469,7 @@ makeLabel(
 )
 
 local refInputBox = Instance.new("TextBox")
-refInputBox.Size             = UDim2.new(1, 0, 0, 36)
+refInputBox.Size             = UDim2.new(1, -24, 0, 36)
 refInputBox.BackgroundColor3 = C.input
 refInputBox.TextColor3       = C.white
 refInputBox.PlaceholderText  = 'Paste one or more image URLs, then click Add URL'
@@ -488,7 +488,7 @@ refInputPad.PaddingRight = UDim.new(0, 8)
 refInputPad.Parent = refInputBox
 
 local refActionRow = Instance.new("Frame")
-refActionRow.Size = UDim2.new(1, 0, 0, 28)
+refActionRow.Size = UDim2.new(1, -24, 0, 28)
 refActionRow.BackgroundTransparency = 1
 refActionRow.LayoutOrder = 10
 refActionRow.Parent = buildCard
@@ -507,7 +507,7 @@ local clearRefBtn = makeInlineButton("Clear All", 3, C.surfaceAlt, refActionRow)
 local refCountLabel = makeLabel("Attached references: 0/3", 11, 14, C.subtext, false, false, buildCard, Enum.Font.Gotham, 11)
 
 local refListCard = Instance.new("Frame")
-refListCard.Size = UDim2.new(1, 0, 0, 0)
+refListCard.Size = UDim2.new(1, -24, 0, 0)
 refListCard.AutomaticSize = Enum.AutomaticSize.Y
 refListCard.BackgroundColor3 = C.surfaceAlt
 refListCard.BorderSizePixel = 0
@@ -524,7 +524,7 @@ refListPad.PaddingBottom = UDim.new(0, 8)
 refListPad.Parent = refListCard
 
 local refListBody = Instance.new("Frame")
-refListBody.Size = UDim2.new(1, 0, 0, 0)
+refListBody.Size = UDim2.new(1, -16, 0, 0)
 refListBody.AutomaticSize = Enum.AutomaticSize.Y
 refListBody.BackgroundTransparency = 1
 refListBody.Parent = refListCard
@@ -541,7 +541,7 @@ local refEmptyLabel = makeLabel(
 
 -- ── Options row (Quality toggle + Environment toggle) ─────────
 local optionsRow = Instance.new("Frame")
-optionsRow.Size = UDim2.new(1, 0, 0, 30)
+optionsRow.Size = UDim2.new(1, -24, 0, 30)
 optionsRow.BackgroundTransparency = 1
 optionsRow.LayoutOrder = 13
 optionsRow.Parent = buildCard
@@ -613,7 +613,7 @@ makeLabel(
 )
 
 local statusFrame = Instance.new("Frame")
-statusFrame.Size             = UDim2.new(1, 0, 0, 32)
+statusFrame.Size             = UDim2.new(1, -24, 0, 32)
 statusFrame.BackgroundColor3 = C.surfaceAlt
 statusFrame.BorderSizePixel  = 0
 statusFrame.LayoutOrder      = 3
@@ -654,7 +654,7 @@ makeLabel(
 )
 
 local viewerTabsRow = Instance.new("Frame")
-viewerTabsRow.Size = UDim2.new(1, 0, 0, 34)
+viewerTabsRow.Size = UDim2.new(1, -24, 0, 34)
 viewerTabsRow.BackgroundTransparency = 1
 viewerTabsRow.LayoutOrder = 3
 viewerTabsRow.Parent = viewerTabsCard
@@ -823,7 +823,7 @@ local function renderReferenceImages()
 
     for index, item in ipairs(referenceImages) do
         local row = Instance.new("Frame")
-        row.Size = UDim2.new(1, 0, 0, 30)
+        row.Size = UDim2.new(1, -24, 0, 30)
         row.BackgroundColor3 = C.input
         row.BorderSizePixel = 0
         row.LayoutOrder = index + 1
