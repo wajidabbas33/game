@@ -472,7 +472,7 @@ local refInputBox = Instance.new("TextBox")
 refInputBox.Size             = UDim2.new(1, -24, 0, 36)
 refInputBox.BackgroundColor3 = C.input
 refInputBox.TextColor3       = C.white
-refInputBox.PlaceholderText  = 'Paste one or more image URLs, then click Add URL'
+refInputBox.PlaceholderText  = 'Paste image URLs, data:image base64, or asset IDs; one per line'
 refInputBox.TextWrapped      = true
 refInputBox.ClearTextOnFocus = false
 refInputBox.Font             = Enum.Font.Gotham
@@ -746,6 +746,11 @@ local function isHttpUrl(text)
     return value:match("^https?://") ~= nil
 end
 
+local function isDataImageUrl(text)
+    local value = trimString(text)
+    return value:match("^data:image/[%w%+%-%.]+;base64,") ~= nil
+end
+
 local function normalizeAssetId(text)
     local value = trimString(tostring(text or ""))
     if value == "" then
@@ -776,6 +781,8 @@ local function normalizeReferenceEntry(entry)
     if entryType == "" then
         if isHttpUrl(rawValue) then
             entryType = "url"
+        elseif isDataImageUrl(rawValue) then
+            entryType = "inline"
         elseif normalizeAssetId(rawValue) then
             entryType = "asset"
         end
@@ -804,7 +811,18 @@ local function normalizeReferenceEntry(entry)
         }
     end
 
-    return nil, "Reference image type must be a URL or Roblox asset."
+    if entryType == "inline" then
+        if not isDataImageUrl(rawValue) then
+            return nil, "Inline image payload must start with data:image/...;base64,"
+        end
+        return {
+            type = "inline",
+            value = rawValue,
+            label = label ~= "" and label or "Pasted image",
+        }
+    end
+
+    return nil, "Reference image type must be URL, inline data image, or Roblox asset."
 end
 
 local function clearReferenceRows()
@@ -841,7 +859,7 @@ local function renderReferenceImages()
         rowLabel.Text = string.format(
             "[%d] %s • %s",
             index,
-            item.type == "asset" and "Asset" or "URL",
+            item.type == "asset" and "Asset" or (item.type == "inline" and "Inline" or "URL"),
             truncateMiddle(item.label or item.value, 54)
         )
         rowLabel.Parent = row
@@ -894,10 +912,27 @@ end
 
 local function parseReferenceInput(raw)
     local entries = {}
-    for token in tostring(raw or ""):gmatch("[^,\n]+") do
+    local text = tostring(raw or "")
+    if isDataImageUrl(text) then
+        table.insert(entries, trimString(text))
+        return entries
+    end
+
+    for token in text:gmatch("[^\n]+") do
         local trimmed = trimString(token)
         if trimmed ~= "" then
-            table.insert(entries, trimmed)
+            -- Allow comma-separated URLs/assets on a single line for convenience,
+            -- but keep inline data:image payloads intact.
+            if isDataImageUrl(trimmed) then
+                table.insert(entries, trimmed)
+            else
+                for piece in trimmed:gmatch("[^,]+") do
+                    local normalized = trimString(piece)
+                    if normalized ~= "" then
+                        table.insert(entries, normalized)
+                    end
+                end
+            end
         end
     end
     return entries
@@ -913,7 +948,8 @@ local function flushReferenceInput(showStatusMessage)
     local added = 0
 
     for _, token in ipairs(parseReferenceInput(raw)) do
-        local inferredType = isHttpUrl(token) and "url" or (normalizeAssetId(token) and "asset" or "")
+        local inferredType = isHttpUrl(token) and "url"
+            or (isDataImageUrl(token) and "inline" or (normalizeAssetId(token) and "asset" or ""))
         local ok, message = addReferenceImage({
             type = inferredType,
             value = token,

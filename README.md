@@ -132,6 +132,7 @@ The AI will automatically break complex requests into phases. Click "Continue to
 
 ### Reference Images
 - Paste one or more public image URLs into the **Reference Images** field and click **Add URL**
+- Paste inline clipboard image payloads in `data:image/<type>;base64,...` format (one per line) and click **Add URL**
 - Click **Attach Asset** to pick a Roblox decal/image asset from Studio
 - The plugin keeps up to 3 references in order and sends them as `referenceImages` to the backend
 - If `VISION_MODEL` is not configured, generation still works but the backend returns a warning that image analysis was skipped

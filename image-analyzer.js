@@ -94,6 +94,15 @@ function isHttpUrl(value) {
     }
 }
 
+function isDataImageUrl(value) {
+    if (typeof value !== 'string') {
+        return false;
+    }
+
+    const trimmed = value.trim();
+    return /^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+$/.test(trimmed);
+}
+
 function parseRobloxAssetId(value) {
     if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
         return String(Math.floor(value));
@@ -141,13 +150,18 @@ function normalizeReferenceImages(referenceImages, legacyImageUrls) {
                 return;
             }
 
+            if (isDataImageUrl(trimmed)) {
+                images.push({ type: 'inline', value: trimmed });
+                return;
+            }
+
             const assetId = parseRobloxAssetId(trimmed);
             if (assetId) {
                 images.push({ type: 'asset', value: assetId });
                 return;
             }
 
-            warnings.push(`${sourceLabel} "${trimmed}" is not a valid image URL or Roblox asset reference.`);
+            warnings.push(`${sourceLabel} "${trimmed}" is not a valid image URL, inline image payload, or Roblox asset reference.`);
             return;
         }
 
@@ -174,6 +188,15 @@ function normalizeReferenceImages(referenceImages, legacyImageUrls) {
                 images.push({ type: 'url', value: rawValue, label });
             } else {
                 warnings.push(`${sourceLabel} "${rawValue}" is not a valid HTTP(S) image URL.`);
+            }
+            return;
+        }
+
+        if (rawType === 'inline') {
+            if (isDataImageUrl(rawValue)) {
+                images.push({ type: 'inline', value: rawValue, label });
+            } else {
+                warnings.push(`${sourceLabel} is not a valid data:image/...;base64 payload.`);
             }
             return;
         }
@@ -289,6 +312,20 @@ async function resolveReferenceImages(referenceImages) {
                 });
             } else {
                 warnings.push(`Reference image URL "${entry.value}" is invalid and was skipped.`);
+            }
+            continue;
+        }
+
+        if (entry.type === 'inline') {
+            if (isDataImageUrl(entry.value)) {
+                resolved.push({
+                    type: 'inline',
+                    value: entry.value,
+                    label: entry.label || 'Pasted image',
+                    url: entry.value,
+                });
+            } else {
+                warnings.push('Inline reference image payload is invalid and was skipped.');
             }
             continue;
         }
@@ -466,4 +503,5 @@ module.exports = {
     resolveReferenceImages,
     parseRobloxAssetId,
     isHttpUrl,
+    isDataImageUrl,
 };
