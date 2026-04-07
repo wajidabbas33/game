@@ -35,6 +35,23 @@ const rateLimit = require('express-rate-limit');
 const OpenAI    = require('openai');
 require('dotenv').config();
 
+// ── Phase 2 modules ─────────────────────────────────────────
+const { getTemplateCatalogText, resolveTemplatePlacements } = require('./templates');
+const {
+    SCENE_PLANNER_PROMPT,
+    buildScenePlanContext,
+    validateScenePlan,
+    resolveScenePlanTemplates,
+    generateEnvironment,
+    validateSceneOutput,
+} = require('./scene-planner');
+const {
+    analyzeReferenceImages,
+    imageAnalysisToContext,
+    normalizeReferenceImages,
+    resolveReferenceImages,
+} = require('./image-analyzer');
+
 // ── [B6] Fail-fast environment validation ────────────────────
 // Supports Qwen and OpenAI: at least one API key must be present.
 // AI_PROVIDER env var selects explicitly; otherwise auto-detect.
@@ -342,51 +359,135 @@ Required scripts:
   • WaveUI (LocalScript → StarterPlayerScripts)
     - Shows wave number, remaining enemies, and countdowns
 
+── NPC / ENEMY SYSTEMS ────────────────────────────────────
+When the user asks for NPCs, enemies, bosses, or shopkeepers:
+  • Generate the NPC model, spawn markers, or folders they need.
+  • Use Humanoid / HumanoidRootPart patterns for humanoid NPCs.
+  • Add the server scripts that control patrol, chase, combat, dialog, or shop logic.
+  • Give NPCs and spawn points explicit names like GuardNPC, VendorNPC, EnemySpawn1.
+
+── SOUND / AUDIO SYSTEMS ──────────────────────────────────
+When the user asks for music, ambience, beeps, or sound effects:
+  • Generate Sound instances with clear names like RoundMusic, CaptureSFX, LobbyAmbience.
+  • Set SoundId, Volume, Looped, PlaybackSpeed, and RollOffMaxDistance when relevant.
+  • Parent UI sounds to StarterGui, world sounds to Workspace, and reusable sounds to ReplicatedStorage.
+  • Add scripts that play or stop the sounds when the request implies runtime behavior.
+
+════════════════════════════════════════════════════════════
+SCALE REFERENCE (Roblox studs)
+════════════════════════════════════════════════════════════
+1 stud ≈ 0.28 meters (roughly 1 foot = 3.5 studs)
+
+Common real-world sizes in studs:
+  • Roblox character standing height: ~5.5 studs
+  • Standard door: 4 wide × 7 tall × 0.5 thick
+  • Ceiling height for interiors: 12–16 studs
+  • Interior wall thickness: 1 stud
+  • Exterior wall thickness: 1.5–2 studs
+  • Single desk: 5 wide × 3 deep × 3.4 tall
+  • Chair seat height: 2.2 studs from floor
+  • Window: 4 wide × 5 tall, bottom edge 4 studs above floor
+  • Small tree: ~12 studs tall (trunk ~8 studs + canopy)
+  • Medium tree: ~19 studs tall
+  • Street lamp: ~15 studs tall
+  • Road width: 12 studs single lane, 24 studs two-lane
+  • Sidewalk: 4–6 studs wide
+  • Fence: 4 studs tall
+  • Residential floor: 14–18 studs per story
+  • Park bench: 6 wide × 2 deep × 2.5 seat height
+
+Object spacing (center to center):
+  • Desks in classroom: 6–8 studs apart
+  • Trees in forest: 15–30 studs apart
+  • Trees along path: 12–18 studs apart
+  • Street lamps along road: 30–40 studs apart
+  • Flower clusters: 3–6 studs apart
+  • Park benches: 15–25 studs apart
+  • Buildings on street: 20–40 studs apart
+
+Color palettes (use curated palettes, not raw primary colors):
+  • Natural grass:     [67, 140, 49] to [82, 158, 58]
+  • Natural wood:      [101, 67, 33] to [156, 114, 68]
+  • Stone/rock:        [120, 115, 105] to [148, 148, 140]
+  • Water:             [68, 140, 190] to [95, 170, 220]
+  • Warm light:        [255, 220, 140] to [255, 200, 100]
+  • Cool interior:     [200, 195, 185] to [220, 215, 208]
+  • Metal/dark:        [55, 55, 60] to [80, 80, 85]
+  • Sand:              [210, 195, 150] to [230, 215, 175]
+
 ════════════════════════════════════════════════════════════
 MAP / LAYOUT GENERATION RULES
 ════════════════════════════════════════════════════════════
 When the user asks for a map, terrain, room, arena, classroom, base,
 or architecture, generate structured Roblox instances, not only scripts.
 
+Scene composition approach:
+  1. Start with the overall dimensions and ground plane.
+  2. Build the structural shell (floor, walls, ceiling/roof).
+  3. Add major features (platforms, hills, water, roads).
+  4. Place objects with correct spacing using the scale reference above.
+  5. Add detail objects (lights, decor, spawn markers).
+  6. Include surrounding environment (terrain, props, boundaries).
+
 For map generation:
   • Create major containers first using Model instances with unique Name values.
   • Use floor, walls, platforms, landmarks, spawn areas, and cover pieces.
-  • Prefer fewer larger structural parts over many tiny decorative parts.
+  • ALWAYS include enough objects to make the scene feel complete — not just a floor.
+  • For a classroom: include floor, 4 walls, ceiling, windows, whiteboard, 10+ desk/chair pairs, lighting.
+  • For an island: include terrain layers (grass top, rock/dirt sides), hills, trees, paths, water around edges, props.
+  • For an arena: include floor, boundary walls, cover spots, spawns, center objective, spectator areas.
   • Use Anchored = true for environment pieces unless movement is required.
   • Give gameplay-critical objects clear names: RedSpawn, BlueSpawn, HillZone, FlagBase, LobbySpawn.
   • If scripts will reference an object, that object MUST be named and generated in the same response.
 
+Environment — the surrounding world:
+  • NEVER leave the area around the main build as empty baseplate.
+  • Generate ground terrain extending beyond the main structure.
+  • Add environmental props: trees, rocks, lamp posts, benches, flower beds.
+  • Define map boundaries with invisible walls or terrain edges.
+  • For floating islands: add underside detail (rock), surrounding water/sky.
+  • For ground-level maps: add surrounding terrain, roads leading to edges, background structures.
+  • Use 10–20 terrain operations and 15–30 instances for environmental detail.
+
 Optional instance parenting:
   • instances[].parent may be:
       - "Workspace"  → parent directly to Workspace
+      - "StarterGui" / "ReplicatedStorage" / "StarterPlayerScripts" → parent to safe Roblox services
       - "Selection"  → parent to the currently selected Studio object
       - "<Name>"     → parent to another generated instance with that Name
   • Use this to build nested layouts such as Model -> Parts.
+  • GUI trees should usually start with a ScreenGui parented to StarterGui.
+  • Sound instances should parent to Workspace, ReplicatedStorage, StarterGui, or a generated instance by name.
 
 Recommended map patterns:
-  • Arena map → Arena model, floor, boundary walls, center objective/platform, team spawns
-  • Lobby map → Lobby model, waiting area, signage area, spawn point, teleport path
-  • Classroom/interior → container model, floor, 4 walls, ceiling, windows, front board, desk rows
+  • Arena map → Arena model, floor, boundary walls, center objective/platform, team spawns, cover blocks, surrounding terrain
+  • Lobby map → Lobby model, waiting area, signage area, spawn point, teleport path, decorative plants
+  • Classroom/interior → container model, floor, 4 walls, ceiling, windows, front board, desk rows, chair at each desk, lights
+  • Island → terrain base (Grass block), terrain hills (Ball), trees, paths, pond/water, flower clusters, edge rocks, boundary water
+  • Town/outdoor → ground terrain, road network, buildings (shells), trees along streets, lamp posts, benches, boundary terrain
 
 ════════════════════════════════════════════════════════════
 TERRAIN GENERATION RULES
 ════════════════════════════════════════════════════════════
-When the user explicitly asks for terrain, hills, cliffs, rivers, caves,
+When the user asks for terrain, hills, cliffs, rivers, caves,
 islands, mountains, or natural landforms, use the "terrain" array in addition
 to or instead of parts/models.
 
 Terrain rules:
   • Use "terrain" for natural surfaces and landforms. Use "instances" for buildings, props, spawns, and precise gameplay markers.
-  • Prefer a small number of large terrain operations over many tiny fragments.
+  • Use multiple terrain operations to build complex landscapes — not just one flat block.
+  • A proper island needs: Grass top block, Rock/Ground underside ball, Water surrounding block, + hills and features.
+  • A proper hill needs at least 2 terrain balls (grass cap + ground core) for a natural shape.
   • Use shape "Block" for plateaus, ramps, river cuts, and flat ground.
   • Use shape "Ball" for hills, mounds, craters, and rounded landforms.
   • Use shape "Cylinder" for vertical shafts, cliffs, pillars, and tunnels.
-  • Use material names from Roblox terrain materials such as Grass, Ground, Rock, Sand, Mud, Snow, Slate, Water, or Air.
+  • Use material names from Roblox terrain materials: Grass, Ground, Rock, Sand, Mud, Snow, Slate, Water, Air.
   • Use material "Air" to carve or clear terrain volumes when needed.
   • Always provide "position". Provide "rotation" for Block/Cylinder when tilt or direction matters.
+  • Layer multiple terrain ops to create natural-looking landscapes with material transitions.
   • If the user asks for both terrain and gameplay, prefer phases:
-      Phase 1: Base terrain / landforms
-      Phase 2: Structures, spawns, and objectives
+      Phase 1: Base terrain, landforms, environment, and key structures
+      Phase 2: Gameplay objects, spawns, and objectives
       Phase 3: Scripts, UI, and polish
 
 ════════════════════════════════════════════════════════════
@@ -400,10 +501,11 @@ ADVANCED LOGIC + OPTIMIZATION
 6. Clean up event connections, temporary state, and player tables when players leave or rounds end.
 7. Keep map part counts reasonable and use symmetrical layouts when the user asks for competitive maps.
 8. When asked for map + systems together, prefer phases:
-     Phase 1: Create the map shell / architecture
+     Phase 1: Create the complete map with terrain, structures, and environment
      Phase 2: Add gameplay systems and scripts
      Phase 3: Add UI, polish, or optional extras
 9. Produce working, maintainable Luau rather than clever but fragile code.
+10. When modifying an existing script from a prior turn, reuse the same script name and parent so it can be updated in place instead of duplicated.
 
 ════════════════════════════════════════════════════════════
 STRICT RULES
@@ -422,7 +524,9 @@ STRICT RULES
 8.  For complex requests, ALWAYS use phases. Never try to generate
     10 scripts in one response — quality drops significantly.
 9.  If you generate nested maps, use instances[].parent to keep
-    the hierarchy organized and predictable.`;
+    the hierarchy organized and predictable.
+10. For map/scene requests, generate a RICH output with 15–40 instances,
+    not just a floor and 2 walls. Include props, lights, and detail.`;
 
 const FAST_SYSTEM_PROMPT = `You are an expert Roblox Luau developer embedded inside Roblox Studio.
 Return ONLY a single valid JSON object. No prose, no markdown, no code fences.
@@ -484,9 +588,14 @@ Rules:
 - Return valid JSON only.
 - "type" must be Script | LocalScript | ModuleScript.
 - Script "parent" must be Workspace | ServerScriptService | StarterPlayerScripts | ReplicatedStorage | StarterGui.
+- instances[].parent may be Workspace | Selection | ServerScriptService | StarterPlayerScripts | ReplicatedStorage | StarterGui | "<Name>".
 - Use game:GetService() inside Luau source.
 - When the user asks for a map or arena, generate instances, not only scripts.
 - When the user asks for natural landforms or terrain, generate "terrain" operations, not just Parts.
+- GUI trees should usually start with a ScreenGui under StarterGui.
+- Generate Sound instances when the user asks for music, ambience, or SFX.
+- For NPC or enemy requests, generate both the NPC/spawn structure and the scripts that drive it.
+- When updating an existing script, keep the same script name and parent so the plugin can edit it in place.
 - For complex requests, use phases and return only the current phase.
 - Keep the response compact and avoid decorative extras unless explicitly requested.`;
 
@@ -843,24 +952,36 @@ function shouldUseFastSystemPrompt(prompt, session) {
         || !looksComplexPrompt(prompt);
 }
 
-function estimateMaxTokens(prompt, session) {
+function estimateMaxTokens(prompt, session, mode) {
     const text = String(prompt || '').toLowerCase();
     const isSystemHeavyPrompt = /\b(survival|waves?|npc|enemy|enemies|capture the flag|king of the hill|leaderboard|datastore)\b/.test(text)
         && /\b(system|manager|spawn|timer|team|score|round|ai)\b/.test(text);
 
+    // Detailed mode gets higher token budgets for richer output
+    if (mode === 'detailed') {
+        if (isContinuePrompt(text) || isContextualFollowUpPrompt(prompt, session)) {
+            return 3000;
+        }
+        if (looksComplexPrompt(text) || isSystemHeavyPrompt) {
+            return 5000;
+        }
+        return 4000;
+    }
+
+    // Quick mode (single-pass) — original limits raised slightly
     if (isContinuePrompt(text) || isContextualFollowUpPrompt(prompt, session)) {
-        return 1600;
+        return 2400;
     }
 
     if (looksComplexPrompt(text) || isSystemHeavyPrompt) {
-        return 1900;
+        return 3500;
     }
 
     if (text.length < 100) {
-        return 950;
+        return 1600;
     }
 
-    return 1200;
+    return 2400;
 }
 
 function buildPerformanceSystemMessage(prompt, session) {
@@ -1784,7 +1905,8 @@ async function retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
 
 // ── POST /generate ───────────────────────────────────────────
 app.post('/generate', apiLimiter, async (req, res) => {
-    const { prompt, conversationId } = req.body;
+    const { prompt, conversationId, mode, generateEnv, imageUrls, referenceImages } = req.body;
+    const generationMode = (mode === 'detailed') ? 'detailed' : 'quick';
 
     // Input validation — before touching any state
     if (!prompt || typeof prompt !== 'string' || prompt.trim() === '') {
@@ -1829,12 +1951,106 @@ app.post('/generate', apiLimiter, async (req, res) => {
 
     try {
         const performanceSystemMessage = buildPerformanceSystemMessage(prompt, session);
+
+        // ── Image analysis (if reference images were provided) ─
+        let imageContext = '';
+        const imageWarnings = [];
+        const normalizedReferenceResult = normalizeReferenceImages(referenceImages, imageUrls);
+        const normalizedReferenceImages = normalizedReferenceResult.images;
+        if (normalizedReferenceResult.warnings.length > 0) {
+            imageWarnings.push(...normalizedReferenceResult.warnings);
+        }
+
+        if (normalizedReferenceImages.length > 0) {
+            try {
+                if (!process.env.VISION_MODEL) {
+                    imageWarnings.push(
+                        'Reference images were provided, but VISION_MODEL is not configured in .env. Image analysis was skipped.'
+                    );
+                } else {
+                    const resolvedReferenceResult = await resolveReferenceImages(normalizedReferenceImages);
+                    if (resolvedReferenceResult.warnings.length > 0) {
+                        imageWarnings.push(...resolvedReferenceResult.warnings);
+                    }
+
+                    if (resolvedReferenceResult.images.length > 0) {
+                        const imageAnalysis = await analyzeReferenceImages(resolvedReferenceResult.images, prompt);
+                        if (imageAnalysis) {
+                            imageContext = imageAnalysisToContext(imageAnalysis);
+                            console.log('📷 Image analysis injected into prompt context');
+                        } else {
+                            imageWarnings.push('Reference images were resolved, but the vision model did not return usable analysis.');
+                        }
+                    } else {
+                        imageWarnings.push('No valid reference images could be resolved for analysis.');
+                    }
+                }
+            } catch (imgErr) {
+                imageWarnings.push('Failed to analyze reference images: ' + imgErr.message);
+                console.warn('⚠️  Image analysis failed:', imgErr.message);
+            }
+        }
+
+        // ── Two-pass pipeline (Detailed mode) ───────────────
+        let scenePlan = null;
+        let scenePlanText = null;
+
+        if (generationMode === 'detailed' && !isContinuePrompt(prompt) && !isContextualFollowUpPrompt(prompt, session)) {
+            console.log('🔬 Detailed mode: running scene planner...');
+            const plannerMessages = [
+                { role: 'system', content: SCENE_PLANNER_PROMPT },
+            ];
+            if (imageContext) {
+                plannerMessages.push({ role: 'system', content: imageContext });
+            }
+            plannerMessages.push({ role: 'user', content: String(prompt).slice(0, 4000) });
+
+            try {
+                const planCompletion = await withTimeout(
+                    retryWithBackoff(() =>
+                        aiClient.chat.completions.create(buildCompletionRequest(plannerMessages, {
+                            maxTokens: 1200,
+                        }))
+                    ),
+                    20_000,
+                    'PLANNER_TIMEOUT'
+                );
+                const planRaw = getCompletionText(planCompletion.choices[0].message || {});
+                try {
+                    scenePlan = parseJsonResponse(planRaw);
+                    const planValidation = validateScenePlan(scenePlan);
+                    if (planValidation.warnings.length > 0) {
+                        console.warn('Scene plan warnings:', planValidation.warnings);
+                    }
+                    scenePlanText = JSON.stringify(scenePlan, null, 2);
+                    console.log('✅ Scene plan generated:', scenePlan.title || scenePlan.sceneType);
+                } catch (planParseErr) {
+                    console.warn('⚠️  Scene planner returned unparseable JSON, falling back to single-pass');
+                    scenePlan = null;
+                }
+            } catch (planErr) {
+                console.warn('⚠️  Scene planner failed, falling back to single-pass:', planErr.message);
+                scenePlan = null;
+            }
+        }
+
+        // ── Build main AI messages ───────────────────────────
         const systemPrompt = shouldUseFastSystemPrompt(prompt, session)
             ? FAST_SYSTEM_PROMPT
             : SYSTEM_PROMPT;
         const messages = [
             { role: 'system', content: systemPrompt },
         ];
+
+        // Inject scene plan context if available
+        if (scenePlan) {
+            messages.push({ role: 'system', content: buildScenePlanContext(scenePlan) });
+        }
+
+        // Inject image context for single-pass mode
+        if (imageContext && !scenePlan) {
+            messages.push({ role: 'system', content: imageContext });
+        }
 
         if (performanceSystemMessage) {
             messages.push({ role: 'system', content: performanceSystemMessage });
@@ -1857,10 +2073,10 @@ app.post('/generate', apiLimiter, async (req, res) => {
                 completion = await withTimeout(
                     retryWithBackoff(() =>
                         aiClient.chat.completions.create(buildCompletionRequest(messages, {
-                            maxTokens: estimateMaxTokens(prompt, session),
+                            maxTokens: estimateMaxTokens(prompt, session, generationMode),
                         }))
                     ),
-                    25_000
+                    50_000  // Raised from 25s to 50s for two-pass pipeline
                 );
             } catch (err) {
                 if (err.code === 'AI_TIMEOUT') {
@@ -2007,11 +2223,60 @@ app.post('/generate', apiLimiter, async (req, res) => {
                 }));
         }
 
+        // ── Merge template-resolved objects (Detailed mode) ─
+        if (scenePlan) {
+            try {
+                const templateResult = resolveScenePlanTemplates(scenePlan);
+                if (templateResult.instances.length > 0 || templateResult.terrain.length > 0) {
+                    safe.instances = [...(safe.instances || []), ...templateResult.instances];
+                    safe.terrain = [...(safe.terrain || []), ...templateResult.terrain];
+                    console.log(`📦 Merged ${templateResult.instances.length} template instances, ${templateResult.terrain.length} terrain ops`);
+                }
+            } catch (tmplErr) {
+                console.warn('⚠️  Template resolution failed:', tmplErr.message);
+            }
+        }
+
+        // ── Environment generation ───────────────────────────
+        if (generateEnv !== false && scenePlan) {
+            try {
+                const envResult = generateEnvironment(scenePlan);
+                if (envResult.instances.length > 0 || envResult.terrain.length > 0) {
+                    safe.instances = [...(safe.instances || []), ...envResult.instances];
+                    safe.terrain = [...(safe.terrain || []), ...envResult.terrain];
+                    console.log(`🌍 Added ${envResult.instances.length} environment instances, ${envResult.terrain.length} terrain ops`);
+                }
+            } catch (envErr) {
+                console.warn('⚠️  Environment generation failed:', envErr.message);
+            }
+        }
+
+        // ── Scene validation ─────────────────────────────────
+        const sceneValidation = validateSceneOutput(safe, {
+            scenePlan,
+            expectEnvironment: !!(scenePlan && generateEnv !== false && scenePlan.environment?.generateSurroundings),
+        });
+
         // [G3] Cross-reference check
-        const warnings = checkCrossReferences(safe);
-        if (warnings.length > 0) {
-            safe.warnings = warnings;
-            console.warn('Cross-reference warnings:', warnings);
+        const crossRefWarnings = checkCrossReferences(safe);
+        const allWarnings = [...crossRefWarnings, ...(sceneValidation.warnings || [])];
+        if (imageWarnings.length > 0) {
+            allWarnings.push(...imageWarnings);
+        }
+        if (allWarnings.length > 0) {
+            safe.warnings = allWarnings;
+            console.warn('Validation warnings:', allWarnings);
+        }
+
+        // Critical errors — signal plugin to block apply
+        if (sceneValidation.errors && sceneValidation.errors.length > 0) {
+            safe.validationErrors = sceneValidation.errors;
+            console.error('Validation ERRORS (should block apply):', sceneValidation.errors);
+        }
+
+        // ── Attach scene plan to response for plugin preview ─
+        if (scenePlanText) {
+            safe.scenePlan = scenePlanText;
         }
 
         // Store assistant reply in history

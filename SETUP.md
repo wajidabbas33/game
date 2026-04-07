@@ -27,8 +27,10 @@ Edit the `.env` file and paste your API key:
 
 ```env
 QWEN_API_KEY=sk-your-key-here
-QWEN_MODEL=qwen3.6-plus
+QWEN_MODEL=qwen3-coder-plus
 AI_PROVIDER=qwen
+# Optional but recommended for reference-image analysis
+VISION_MODEL=qwen-vl-plus
 ```
 
 ### Step 4: Start the Server
@@ -74,6 +76,15 @@ Create a red brick at position 0,5,0
 
 Click **Generate** and watch the magic happen! ✨
 
+For richer scene generation:
+1. Switch to **🔬 Detailed** mode
+2. Leave **Environment** on
+3. Add up to 3 reference images using pasted URLs or **Attach Asset**
+4. Try:
+```text
+Build a classroom with rows of desks, a whiteboard, warm lighting, trees outside, a path to the entrance, boundary walls, and surrounding world detail
+```
+
 ## 🎮 Example Prompts
 
 ### Simple Objects
@@ -111,9 +122,10 @@ AI: [Adds rotation script]
 2. Click **New Project** → **Deploy from GitHub**
 3. Connect your repository
 4. Add environment variable: `QWEN_API_KEY=your_key`
-5. Optional: add `AI_PROVIDER=qwen`
-6. Railway gives you a URL like `https://your-app.railway.app`
-7. Update the plugin URL in Roblox Studio to this URL
+5. Recommended: add `QWEN_MODEL=qwen3-coder-plus`
+6. Optional: add `AI_PROVIDER=qwen`
+7. Railway gives you a URL like `https://your-app.railway.app`
+8. Update the plugin URL in Roblox Studio to this URL
 
 ### Render
 
@@ -123,9 +135,10 @@ AI: [Adds rotation script]
 4. Build Command: `npm install`
 5. Start Command: `npm start`
 6. Add environment variable: `QWEN_API_KEY=your_key`
-7. Optional: add `AI_PROVIDER=qwen`
-8. Render gives you a URL like `https://your-app.onrender.com`
-9. Update the plugin URL in Roblox Studio to this URL
+7. Recommended: add `QWEN_MODEL=qwen3-coder-plus`
+8. Optional: add `AI_PROVIDER=qwen`
+9. Render gives you a URL like `https://your-app.onrender.com`
+10. Update the plugin URL in Roblox Studio to this URL
 
 ## ❓ Common Issues
 
@@ -138,6 +151,7 @@ AI: [Adds rotation script]
 ### "Rate limit exceeded"
 → Check your DashScope balance or quota window
 → Wait for reset, use a lighter Qwen model, or use another key
+→ If Railway requests are timing out, pin `QWEN_MODEL=qwen3-coder-plus`
 
 ### "Plugin not showing in Roblox Studio"
 → Make sure you copied the file to the plugins folder
@@ -147,6 +161,11 @@ AI: [Adds rotation script]
 → Make sure server is running (`npm start`)
 → Check the URL matches (try `http://127.0.0.1:3000`)
 → Enable HTTP Requests in Game Settings → Security
+
+### "Reference images were skipped"
+→ Set `VISION_MODEL` in `.env`
+→ Use public image URLs or attach valid Roblox image/decal assets
+→ The plugin only sends the first 3 references in the current session list
 
 ## 📊 API Limits (Free Tier)
 
@@ -182,6 +201,9 @@ Each request uses ~5,000-6,000 tokens, so you get about 15-20 generations per da
 ✅ Conversation context
 ✅ Selection awareness
 ✅ Undo stack
+✅ Reference-image URLs and attached Roblox assets
+✅ Two-pass scene planning in Detailed mode
+✅ Wider map environment generation
 
 ## 📝 Next Steps
 

@@ -24,6 +24,9 @@ A complete AI-powered plugin for Roblox Studio that generates game scripts and o
 
 ### Advanced Features
 - 📝 **Multi-Phase Tasks** - Complex requests broken into manageable steps
+- 🖼️ **Reference Images** - Mix pasted image URLs with attached Roblox image/decal assets
+- 🧭 **Two-Pass Scene Planning** - Detailed mode plans layout first, then generates the final scene
+- 🌍 **Playable Map Surroundings** - Adds terrain, roads, props, boundaries, and background structures
 - ⚠️ **Cross-Reference Validation** - Warns when scripts reference missing objects
 - 🔄 **Conversation Context** - AI remembers previous turns
 - 📌 **Selection Awareness** - Includes selected objects in prompts
@@ -43,8 +46,10 @@ A complete AI-powered plugin for Roblox Studio that generates game scripts and o
    Create or edit `.env` file with your Qwen API key:
    ```env
    QWEN_API_KEY=your_qwen_api_key_here
-   QWEN_MODEL=qwen3.6-plus
+   QWEN_MODEL=qwen3-coder-plus
    AI_PROVIDER=qwen
+   # Optional but recommended for reference-image analysis
+   VISION_MODEL=qwen-vl-plus
    ```
    
    **Get a Qwen API key:**
@@ -91,6 +96,7 @@ A complete AI-powered plugin for Roblox Studio that generates game scripts and o
    - Click "Save"
    - Type a prompt: `"Create a red brick at position 0,5,0"`
    - Click "Generate"
+   - For scene work, use `🔬 Detailed` mode and attach up to 3 reference images via URL or Roblox asset picker
 
 ## 📖 Usage Examples
 
@@ -117,7 +123,18 @@ Create a lobby system that waits for 4 players before starting
 Build a capture the flag game with team spawns and flag bases
 ```
 
+### Detailed Scene Prompt
+```
+Build a beautiful floating island with grassy ground, 2 hills, a pond, stone path, trees, flowers, warm lighting, boundary water, and surrounding props
+```
+
 The AI will automatically break complex requests into phases. Click "Continue to Next Phase" to proceed through each step.
+
+### Reference Images
+- Paste one or more public image URLs into the **Reference Images** field and click **Add URL**
+- Click **Attach Asset** to pick a Roblox decal/image asset from Studio
+- The plugin keeps up to 3 references in order and sends them as `referenceImages` to the backend
+- If `VISION_MODEL` is not configured, generation still works but the backend returns a warning that image analysis was skipped
 
 ## 🏗️ Architecture
 
@@ -125,7 +142,8 @@ The AI will automatically break complex requests into phases. Click "Continue to
 ┌─────────────────────────────────────────────────────────┐
 │  Roblox Studio Plugin (Lua)                             │
 │  • UI for prompts and configuration                     │
-│  • Extended type handlers (CFrame, UDim2, Enums)        │
+│  • Reference-image asset picker + URL references        │
+│  • Detailed/Quick generation modes                      │
 │  • Phase management for complex tasks                   │
 └────────────────┬────────────────────────────────────────┘
                  │ HTTP POST /generate
@@ -133,9 +151,9 @@ The AI will automatically break complex requests into phases. Click "Continue to
 ┌─────────────────────────────────────────────────────────┐
 │  Node.js Backend Server                                 │
 │  • IP-based rate limiting (15 req/min)                  │
-│  • Retry logic with exponential backoff                 │
-│  • JSON structure validation                            │
-│  • Cross-reference checking                             │
+│  • Reference image normalization + asset resolution     │
+│  • Two-pass scene planning + template resolution        │
+│  • Environment generation + validation gating           │
 └────────────────┬────────────────────────────────────────┘
                  │ Qwen API
                  ▼
@@ -159,6 +177,8 @@ npm test
 Tests include:
 - Health endpoint
 - Input validation
+- Legacy `imageUrls` compatibility
+- `referenceImages` normalization and warning flow
 - Simple generation
 - Game mode generation
 - Rate limiting (IP-based)
@@ -174,9 +194,10 @@ Tests include:
 1. Create a new project on [Railway](https://railway.app)
 2. Connect your GitHub repository
 3. Add environment variable: `QWEN_API_KEY`
-4. Optional: add `AI_PROVIDER=qwen`
-5. Deploy
-6. Copy the public URL and paste it into the plugin
+4. Recommended: add `QWEN_MODEL=qwen3-coder-plus`
+5. Optional: add `AI_PROVIDER=qwen`
+6. Deploy
+7. Copy the public URL and paste it into the plugin
 
 ### Render
 
@@ -185,9 +206,10 @@ Tests include:
 3. Set build command: `npm install`
 4. Set start command: `npm start`
 5. Add environment variable: `QWEN_API_KEY`
-6. Optional: add `AI_PROVIDER=qwen`
-7. Deploy
-8. Copy the public URL and paste it into the plugin
+6. Recommended: add `QWEN_MODEL=qwen3-coder-plus`
+7. Optional: add `AI_PROVIDER=qwen`
+8. Deploy
+9. Copy the public URL and paste it into the plugin
 
 ## 📁 Project Structure
 
@@ -211,15 +233,19 @@ Tests include:
 ### Backend Environment Variables
 
 - `QWEN_API_KEY` - Your Qwen / DashScope API key
-- `QWEN_MODEL` - Qwen model to use (default: `qwen3.6-plus`)
+- `QWEN_MODEL` - Qwen model to use (default: `qwen3-coder-plus`)
 - `AI_PROVIDER` - `qwen` or `openai` (default auto-detects, but this project uses `qwen`)
 - `OPENAI_API_KEY` - Optional OpenAI fallback key
+- `VISION_MODEL` - Vision-capable model used for reference-image analysis
+- `VISION_API_KEY` - Optional separate key for the vision model
+- `VISION_BASE_URL` - Optional separate base URL for the vision provider
 - `PORT` - Server port (default: 3000)
 
 ### Plugin Settings
 
 - **Backend URL** - Configurable via plugin UI, persists across Studio sessions
 - **Conversation ID** - Auto-generated per session, reset with "Clear Conversation"
+- **Reference Images** - Session-local list of up to 3 URL or Roblox-asset references; not persisted across Studio restarts
 
 ## 🛡️ Security
 
@@ -257,6 +283,13 @@ QWEN_API_KEY=your_key_here
 - Check that the server is running (`npm start`)
 - Ensure HTTP Requests are enabled in Roblox Studio
 - Try `http://127.0.0.1:3000` instead of `http://localhost:3000`
+- On Railway, explicitly set `QWEN_MODEL=qwen3-coder-plus` if requests are timing out
+
+### "Reference images were skipped"
+**Solution:**
+- Set `VISION_MODEL` in `.env`
+- If you use attached Roblox assets, make sure they are valid image/decal assets
+- If you use URLs, use public `http://` or `https://` image links
 
 ### "Rate limit exceeded" (from Qwen API)
 **Solution:**

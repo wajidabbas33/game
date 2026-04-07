@@ -26,8 +26,9 @@
 --  5. Open the plugin, set your backend URL, click Save
 -- ============================================================
 
-local HttpService = game:GetService("HttpService")
-local Selection   = game:GetService("Selection")
+local HttpService      = game:GetService("HttpService")
+local Selection        = game:GetService("Selection")
+local UserInputService = game:GetService("UserInputService")
 
 -- ── [B7] Configurable backend URL ────────────────────────────
 -- Stored in plugin settings so it survives Studio restarts and
@@ -84,8 +85,8 @@ local BACKEND_URL    = getBackendURL()
 local conversationId = HttpService:GenerateGUID(false)
 
 -- ── Undo stack ────────────────────────────────────────────────
--- Each entry = instances created in one generation turn plus metadata
--- about terrain operations, which currently are not reversible.
+-- Each entry = instances created in one generation turn, scripts updated
+-- in place, plus metadata about terrain operations, which are not reversible.
 local undoStack = {}
 
 -- ── Plugin toolbar ────────────────────────────────────────────
@@ -240,6 +241,13 @@ local function makeButton(text, order, bg, height, parent)
     btn.Parent           = parent or root
     applyCorner(btn, 8)
     applyStroke(btn, C.border, 1, 0.45)
+    return btn
+end
+
+local function makeInlineButton(text, order, bg, parent, width)
+    local btn = makeButton(text, order, bg, 28, parent)
+    btn.Size = width or UDim2.new(0.32, -4, 1, 0)
+    btn.TextSize = 11
     return btn
 end
 
@@ -453,7 +461,149 @@ pPad.PaddingTop = UDim.new(0, 10)
 pPad.PaddingBottom = UDim.new(0, 10)
 pPad.Parent = promptBox
 
-local generateBtn = makeButton("Generate Preview", 7, C.accent, 40, buildCard)
+-- ── Reference image input ──────────────────────────────────────
+local refImageLabel = makeLabel("Reference Images (optional)", 7, 14, C.subtext, false, false, buildCard, Enum.Font.Gotham, 12)
+makeLabel(
+    "Paste a public image URL or attach a Roblox image/decal asset from Studio. Up to 3 references per request.",
+    8, 28, C.muted, false, true, buildCard, Enum.Font.Gotham, 11
+)
+
+local refInputBox = Instance.new("TextBox")
+refInputBox.Size             = UDim2.new(1, 0, 0, 36)
+refInputBox.BackgroundColor3 = C.input
+refInputBox.TextColor3       = C.white
+refInputBox.PlaceholderText  = 'Paste one or more image URLs, then click Add URL'
+refInputBox.TextWrapped      = true
+refInputBox.ClearTextOnFocus = false
+refInputBox.Font             = Enum.Font.Gotham
+refInputBox.TextSize         = 12
+refInputBox.TextXAlignment   = Enum.TextXAlignment.Left
+refInputBox.LayoutOrder      = 9
+refInputBox.Parent           = buildCard
+applyCorner(refInputBox, 6)
+applyStroke(refInputBox, C.border, 1, 0.4)
+local refInputPad = Instance.new("UIPadding")
+refInputPad.PaddingLeft = UDim.new(0, 8)
+refInputPad.PaddingRight = UDim.new(0, 8)
+refInputPad.Parent = refInputBox
+
+local refActionRow = Instance.new("Frame")
+refActionRow.Size = UDim2.new(1, 0, 0, 28)
+refActionRow.BackgroundTransparency = 1
+refActionRow.LayoutOrder = 10
+refActionRow.Parent = buildCard
+
+local refActionLayout = Instance.new("UIListLayout")
+refActionLayout.FillDirection = Enum.FillDirection.Horizontal
+refActionLayout.Padding = UDim.new(0, 8)
+refActionLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+refActionLayout.SortOrder = Enum.SortOrder.LayoutOrder
+refActionLayout.Parent = refActionRow
+
+local addRefUrlBtn = makeInlineButton("Add URL", 1, C.accentDim, refActionRow)
+local attachRefAssetBtn = makeInlineButton("Attach Asset", 2, C.surfaceAlt, refActionRow)
+local clearRefBtn = makeInlineButton("Clear All", 3, C.surfaceAlt, refActionRow)
+
+local refCountLabel = makeLabel("Attached references: 0/3", 11, 14, C.subtext, false, false, buildCard, Enum.Font.Gotham, 11)
+
+local refListCard = Instance.new("Frame")
+refListCard.Size = UDim2.new(1, 0, 0, 0)
+refListCard.AutomaticSize = Enum.AutomaticSize.Y
+refListCard.BackgroundColor3 = C.surfaceAlt
+refListCard.BorderSizePixel = 0
+refListCard.LayoutOrder = 12
+refListCard.Parent = buildCard
+applyCorner(refListCard, 8)
+applyStroke(refListCard, C.border, 1, 0.35)
+
+local refListPad = Instance.new("UIPadding")
+refListPad.PaddingLeft = UDim.new(0, 8)
+refListPad.PaddingRight = UDim.new(0, 8)
+refListPad.PaddingTop = UDim.new(0, 8)
+refListPad.PaddingBottom = UDim.new(0, 8)
+refListPad.Parent = refListCard
+
+local refListBody = Instance.new("Frame")
+refListBody.Size = UDim2.new(1, 0, 0, 0)
+refListBody.AutomaticSize = Enum.AutomaticSize.Y
+refListBody.BackgroundTransparency = 1
+refListBody.Parent = refListCard
+
+local refListLayout = Instance.new("UIListLayout")
+refListLayout.Padding = UDim.new(0, 6)
+refListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+refListLayout.Parent = refListBody
+
+local refEmptyLabel = makeLabel(
+    "No reference images added yet.",
+    1, 18, C.muted, false, true, refListBody, Enum.Font.Gotham, 11
+)
+
+-- ── Options row (Quality toggle + Environment toggle) ─────────
+local optionsRow = Instance.new("Frame")
+optionsRow.Size = UDim2.new(1, 0, 0, 30)
+optionsRow.BackgroundTransparency = 1
+optionsRow.LayoutOrder = 13
+optionsRow.Parent = buildCard
+
+local optionsLayout = Instance.new("UIListLayout")
+optionsLayout.FillDirection = Enum.FillDirection.Horizontal
+optionsLayout.Padding = UDim.new(0, 12)
+optionsLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+optionsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+optionsLayout.Parent = optionsRow
+
+-- Quality toggle: Quick / Detailed
+local qualityToggle = Instance.new("TextButton")
+qualityToggle.Size = UDim2.new(0, 110, 0, 26)
+qualityToggle.BackgroundColor3 = C.surfaceAlt
+qualityToggle.TextColor3 = C.white
+qualityToggle.Font = Enum.Font.GothamMedium
+qualityToggle.TextSize = 11
+qualityToggle.Text = "⚡ Quick"
+qualityToggle.LayoutOrder = 1
+qualityToggle.Parent = optionsRow
+applyCorner(qualityToggle, 6)
+applyStroke(qualityToggle, C.border, 1, 0.4)
+
+local isDetailedMode = false
+qualityToggle.MouseButton1Click:Connect(function()
+    isDetailedMode = not isDetailedMode
+    if isDetailedMode then
+        qualityToggle.Text = "\xF0\x9F\x94\xAC Detailed"
+        qualityToggle.BackgroundColor3 = C.accent
+    else
+        qualityToggle.Text = "\xE2\x9A\xA1 Quick"
+        qualityToggle.BackgroundColor3 = C.surfaceAlt
+    end
+end)
+
+-- Environment toggle
+local envToggle = Instance.new("TextButton")
+envToggle.Size = UDim2.new(0, 140, 0, 26)
+envToggle.BackgroundColor3 = C.accent
+envToggle.TextColor3 = C.white
+envToggle.Font = Enum.Font.GothamMedium
+envToggle.TextSize = 11
+envToggle.Text = "\xF0\x9F\x8C\x8D Environment: ON"
+envToggle.LayoutOrder = 2
+envToggle.Parent = optionsRow
+applyCorner(envToggle, 6)
+applyStroke(envToggle, C.border, 1, 0.4)
+
+local generateEnvironment = true
+envToggle.MouseButton1Click:Connect(function()
+    generateEnvironment = not generateEnvironment
+    if generateEnvironment then
+        envToggle.Text = "\xF0\x9F\x8C\x8D Environment: ON"
+        envToggle.BackgroundColor3 = C.accent
+    else
+        envToggle.Text = "\xF0\x9F\x8C\x8D Environment: OFF"
+        envToggle.BackgroundColor3 = C.surfaceAlt
+    end
+end)
+
+local generateBtn = makeButton("Generate Preview", 14, C.accent, 40, buildCard)
 
 local resultsCard = makeCard(4)
 makeLabel("Preview & Output", 1, 18, C.white, true, false, resultsCard, Enum.Font.GothamBold, 14)
@@ -519,6 +669,7 @@ viewerTabsLayout.Parent = viewerTabsRow
 local scriptTabBtn = makeTabButton("Script", viewerTabsRow)
 local outputTabBtn = makeTabButton("3D Output", viewerTabsRow)
 local architectureTabBtn = makeTabButton("Hierarchy", viewerTabsRow)
+local planTabBtn = makeTabButton("Plan", viewerTabsRow)
 
 local scriptViewerCard, scriptViewer, scriptViewerEmpty = makeViewerCard(
     6,
@@ -544,7 +695,15 @@ local architectureViewerCard, architectureViewer, architectureViewerEmpty = make
     210
 )
 
-local actionsCard = makeCard(9)
+local planViewerCard, planViewer, planViewerEmpty = makeViewerCard(
+    9,
+    "Scene Plan",
+    "Structured scene plan showing what the AI understood from your prompt — zones, objects, dimensions, style.",
+    "No scene plan generated yet. Use Detailed mode to enable scene planning.",
+    260
+)
+
+local actionsCard = makeCard(10)
 makeLabel("Session Controls", 1, 18, C.white, true, false, actionsCard, Enum.Font.GothamBold, 14)
 makeLabel(
     "Undo the last applied generation or reset the current conversation before a new request.",
@@ -557,6 +716,287 @@ local clearBtn = makeButton("Clear Conversation", 4, C.surfaceAlt, 34, actionsCa
 local function setStatus(msg, color)
     statusLbl.TextColor3 = color or C.subtext
     statusLbl.Text = tostring(msg):sub(1, 150)
+end
+
+local MAX_REFERENCE_IMAGES = 3
+local referenceImages = {}
+local referenceRows = {}
+
+local function trimString(value)
+    if type(value) ~= "string" then
+        return ""
+    end
+    return value:match("^%s*(.-)%s*$") or ""
+end
+
+local function truncateMiddle(text, maxLen)
+    local value = tostring(text or "")
+    local limit = maxLen or 52
+    if #value <= limit then
+        return value
+    end
+
+    local head = math.max(8, math.floor((limit - 3) / 2))
+    local tail = math.max(8, limit - head - 3)
+    return value:sub(1, head) .. "..." .. value:sub(-tail)
+end
+
+local function isHttpUrl(text)
+    local value = trimString(text)
+    return value:match("^https?://") ~= nil
+end
+
+local function normalizeAssetId(text)
+    local value = trimString(tostring(text or ""))
+    if value == "" then
+        return nil
+    end
+
+    return value:match("^rbxassetid://(%d+)$")
+        or value:match("[?&]id=(%d+)")
+        or value:match("/library/(%d+)")
+        or value:match("/catalog/(%d+)")
+        or value:match("/assets/(%d+)")
+        or value:match("^([0-9]+)$")
+end
+
+local function normalizeReferenceEntry(entry)
+    if type(entry) ~= "table" then
+        return nil, "Reference image entry is invalid."
+    end
+
+    local entryType = trimString(tostring(entry.type or "")):lower()
+    local rawValue = trimString(tostring(entry.value or ""))
+    local label = trimString(tostring(entry.label or ""))
+
+    if rawValue == "" then
+        return nil, "Reference image entry is empty."
+    end
+
+    if entryType == "" then
+        if isHttpUrl(rawValue) then
+            entryType = "url"
+        elseif normalizeAssetId(rawValue) then
+            entryType = "asset"
+        end
+    end
+
+    if entryType == "url" then
+        if not isHttpUrl(rawValue) then
+            return nil, "Reference image URL must start with http:// or https://"
+        end
+        return {
+            type = "url",
+            value = rawValue,
+            label = label ~= "" and label or rawValue,
+        }
+    end
+
+    if entryType == "asset" then
+        local assetId = normalizeAssetId(rawValue)
+        if not assetId then
+            return nil, "Roblox asset references must be numeric IDs or rbxassetid:// IDs."
+        end
+        return {
+            type = "asset",
+            value = assetId,
+            label = label ~= "" and label or ("Asset " .. assetId),
+        }
+    end
+
+    return nil, "Reference image type must be a URL or Roblox asset."
+end
+
+local function clearReferenceRows()
+    for _, row in ipairs(referenceRows) do
+        if row and row.Parent then
+            row:Destroy()
+        end
+    end
+    referenceRows = {}
+end
+
+local function renderReferenceImages()
+    clearReferenceRows()
+    refCountLabel.Text = string.format("Attached references: %d/%d", #referenceImages, MAX_REFERENCE_IMAGES)
+    refEmptyLabel.Visible = #referenceImages == 0
+
+    for index, item in ipairs(referenceImages) do
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, 0, 0, 30)
+        row.BackgroundColor3 = C.input
+        row.BorderSizePixel = 0
+        row.LayoutOrder = index + 1
+        row.Parent = refListBody
+        applyCorner(row, 6)
+        applyStroke(row, C.border, 1, 0.45)
+
+        local rowLabel = Instance.new("TextLabel")
+        rowLabel.Size = UDim2.new(1, -78, 1, 0)
+        rowLabel.BackgroundTransparency = 1
+        rowLabel.TextColor3 = C.white
+        rowLabel.Font = Enum.Font.Gotham
+        rowLabel.TextSize = 11
+        rowLabel.TextXAlignment = Enum.TextXAlignment.Left
+        rowLabel.Text = string.format(
+            "[%d] %s • %s",
+            index,
+            item.type == "asset" and "Asset" or "URL",
+            truncateMiddle(item.label or item.value, 54)
+        )
+        rowLabel.Parent = row
+
+        local rowPad = Instance.new("UIPadding")
+        rowPad.PaddingLeft = UDim.new(0, 8)
+        rowPad.PaddingRight = UDim.new(0, 8)
+        rowPad.Parent = rowLabel
+
+        local removeBtn = makeButton("Remove", 1, C.dangerDim, 22, row)
+        removeBtn.Size = UDim2.new(0, 64, 0, 22)
+        removeBtn.Position = UDim2.new(1, -68, 0.5, -11)
+        removeBtn.TextSize = 11
+        removeBtn.MouseButton1Click:Connect(function()
+            table.remove(referenceImages, index)
+            renderReferenceImages()
+            setStatus("Reference image removed.", C.subtext)
+        end)
+
+        table.insert(referenceRows, row)
+    end
+end
+
+local function addReferenceImage(entry, showStatusMessage)
+    local normalized, err = normalizeReferenceEntry(entry)
+    if not normalized then
+        return false, err
+    end
+
+    for _, existing in ipairs(referenceImages) do
+        if existing.type == normalized.type and existing.value == normalized.value then
+            return false, "That reference image is already attached."
+        end
+    end
+
+    if #referenceImages >= MAX_REFERENCE_IMAGES then
+        return false, "Only 3 reference images can be attached at once."
+    end
+
+    table.insert(referenceImages, normalized)
+    renderReferenceImages()
+    if showStatusMessage then
+        setStatus(
+            string.format("Reference image added (%d/%d).", #referenceImages, MAX_REFERENCE_IMAGES),
+            C.green
+        )
+    end
+    return true, nil
+end
+
+local function parseReferenceInput(raw)
+    local entries = {}
+    for token in tostring(raw or ""):gmatch("[^,\n]+") do
+        local trimmed = trimString(token)
+        if trimmed ~= "" then
+            table.insert(entries, trimmed)
+        end
+    end
+    return entries
+end
+
+local function flushReferenceInput(showStatusMessage)
+    local raw = trimString(refInputBox.Text or "")
+    if raw == "" then
+        return nil
+    end
+
+    local warnings = {}
+    local added = 0
+
+    for _, token in ipairs(parseReferenceInput(raw)) do
+        local inferredType = isHttpUrl(token) and "url" or (normalizeAssetId(token) and "asset" or "")
+        local ok, message = addReferenceImage({
+            type = inferredType,
+            value = token,
+        }, false)
+        if ok then
+            added += 1
+        elseif message then
+            warnings[#warnings + 1] = message
+        end
+    end
+
+    if added > 0 then
+        refInputBox.Text = ""
+        if showStatusMessage then
+            setStatus(
+                string.format("Added %d reference image(s).", added),
+                C.green
+            )
+        end
+    elseif showStatusMessage and #warnings > 0 then
+        setStatus(warnings[1], C.orange)
+    end
+
+    return #warnings > 0 and warnings or nil
+end
+
+local function buildReferenceImagePayload()
+    local payload = {}
+    for _, item in ipairs(referenceImages) do
+        payload[#payload + 1] = {
+            type = item.type,
+            value = item.value,
+            label = item.label,
+        }
+    end
+    return #payload > 0 and payload or nil
+end
+
+local function promptForReferenceAsset()
+    if #referenceImages >= MAX_REFERENCE_IMAGES then
+        setStatus("Only 3 reference images can be attached at once.", C.orange)
+        return
+    end
+
+    setStatus("Select a Roblox decal/image asset...", C.subtext)
+    task.spawn(function()
+        local assetId = nil
+        local lastErr = nil
+        local assetTypes = { "Decal", "Image" }
+
+        for _, assetType in ipairs(assetTypes) do
+            local ok, result = pcall(function()
+                return plugin:PromptForExistingAssetId(assetType)
+            end)
+            if ok then
+                assetId = result
+                break
+            end
+            lastErr = result
+        end
+
+        if type(assetId) == "number" and assetId > 0 then
+            local ok, err = addReferenceImage({
+                type = "asset",
+                value = tostring(assetId),
+                label = "Asset " .. tostring(assetId),
+            }, true)
+            if not ok and err then
+                setStatus(err, C.orange)
+            end
+            return
+        end
+
+        if assetId == -1 then
+            setStatus("Reference asset selection cancelled.", C.subtext)
+            return
+        end
+
+        setStatus("Could not open the Roblox asset picker.", C.red)
+        if lastErr then
+            warn("[AI Plugin] Asset picker error: " .. tostring(lastErr))
+        end
+    end)
 end
 
 local pendingPreview = nil
@@ -1024,6 +1464,11 @@ local viewerTabs = {
         card = architectureViewerCard,
         activeColor = C.orangeSoft,
     },
+    plan = {
+        button = planTabBtn,
+        card = planViewerCard,
+        activeColor = C.accentSoft,
+    },
 }
 
 local function setViewerTab(tabName)
@@ -1068,6 +1513,10 @@ local function updateDemoViewers(data, targetParent, applied)
     setViewerContent(scriptViewer, scriptViewerEmpty, buildScriptViewerText(data))
     setViewerContent(outputViewer, outputViewerEmpty, build3DOutputText(data, targetParent, applied))
     setViewerContent(architectureViewer, architectureViewerEmpty, buildArchitectureViewerText(data, targetParent, applied))
+    -- Update plan viewer if scene plan is present
+    if type(data.scenePlan) == "string" and data.scenePlan ~= "" then
+        setViewerContent(planViewer, planViewerEmpty, data.scenePlan)
+    end
     setViewerTab(getPreferredViewerTab(data))
 end
 
@@ -1117,6 +1566,9 @@ local function clearInfoBoxes()
     architectureViewer.Text = ""
     architectureViewer.Visible = false
     architectureViewerEmpty.Visible = true
+    planViewer.Text = ""
+    planViewer.Visible = false
+    planViewerEmpty.Visible = true
     setViewerTab("script")
 end
 
@@ -1132,16 +1584,49 @@ architectureTabBtn.MouseButton1Click:Connect(function()
     setViewerTab("architecture")
 end)
 
+planTabBtn.MouseButton1Click:Connect(function()
+    setViewerTab("plan")
+end)
+
 setViewerTab("script")
+local isGenerating = false
+renderReferenceImages()
+
+addRefUrlBtn.MouseButton1Click:Connect(function()
+    flushReferenceInput(true)
+end)
+
+attachRefAssetBtn.MouseButton1Click:Connect(function()
+    if not isGenerating then
+        promptForReferenceAsset()
+    end
+end)
+
+clearRefBtn.MouseButton1Click:Connect(function()
+    referenceImages = {}
+    refInputBox.Text = ""
+    renderReferenceImages()
+    setStatus("Reference images cleared.", C.subtext)
+end)
+
+refInputBox.FocusLost:Connect(function(enterPressed)
+    if enterPressed and not isGenerating then
+        flushReferenceInput(true)
+    end
+end)
 
 local function setBusy(busy)
+    busy = not not busy
+    isGenerating = busy
     generateBtn.Active           = not busy
     generateBtn.BackgroundColor3 = busy and C.accentDim or C.accent
     generateBtn.Text             = busy and "Generating Preview..." or "Generate Preview"
     if busy then
         setApplyReady(false)
     elseif pendingPreview then
-        setApplyReady(true)
+        local hasValidationErrors = type(pendingPreview.data.validationErrors) == "table"
+            and #pendingPreview.data.validationErrors > 0
+        setApplyReady(not hasValidationErrors)
     end
 end
 
@@ -1332,9 +1817,11 @@ end
 -- All loop bodies use if/else guards instead.
 local function applyChanges(data, targetParent)
     local createdThisTurn = {}
+    local updatedScriptsThisTurn = {}
     local terrainOperationsApplied = 0
     local createParent = (targetParent and targetParent.Parent) and targetParent or game.Workspace
     local createdByName = {}
+    local updatedScriptsByInstance = {}
     local instanceEntries = {}
 
     local function resolveInstanceParent(parentName)
@@ -1348,6 +1835,35 @@ local function applyChanges(data, targetParent)
         end
 
         return createdByName[parentName] or createParent
+    end
+
+    local function resolveScriptParent(parentName)
+        if type(parentName) ~= "string" or parentName == "" then
+            return game.Workspace
+        end
+
+        if parentName == "Selection" then
+            return createParent
+        end
+
+        local explicitParent = resolveServiceOrContainerPath(parentName)
+        if explicitParent then
+            return explicitParent
+        end
+
+        return createdByName[parentName] or game.Workspace
+    end
+
+    local function trackScriptUpdate(scriptInstance)
+        if updatedScriptsByInstance[scriptInstance] then
+            return
+        end
+
+        updatedScriptsByInstance[scriptInstance] = true
+        table.insert(updatedScriptsThisTurn, {
+            script = scriptInstance,
+            previousSource = scriptInstance.Source,
+        })
     end
 
     -- Create instances
@@ -1396,36 +1912,60 @@ local function applyChanges(data, targetParent)
     -- Create scripts
     if type(data.scripts) == "table" then
         for _, scriptData in ipairs(data.scripts) do
-            local okScript, newScript = pcall(function()
-                return Instance.new(scriptData.type)
-            end)
+            local scriptName = tostring(scriptData.name or "GeneratedScript")
+            local scriptSource = tostring(scriptData.source or "")
+            local scriptParent = resolveScriptParent(scriptData.parent)
+            local existingScript = scriptParent and scriptParent:FindFirstChild(scriptName)
 
-            if not okScript then
-                warn("[AI Plugin] Invalid script type: " .. tostring(scriptData.type))
-            else
-                newScript.Name   = tostring(scriptData.name   or "GeneratedScript")
-                newScript.Source = tostring(scriptData.source or "")
+            if existingScript and existingScript:IsA("LuaSourceContainer") then
+                trackScriptUpdate(existingScript)
 
-                local okSvc, svc = pcall(function()
-                    return game:GetService(scriptData.parent)
+                local okSource, sourceErr = pcall(function()
+                    existingScript.Source = scriptSource
                 end)
-                newScript.Parent = (okSvc and svc) or game.Workspace
-                table.insert(createdThisTurn, newScript)
+
+                if not okSource then
+                    warn("[AI Plugin] Failed to update script " .. scriptName .. ": " .. tostring(sourceErr))
+                elseif scriptData.type and existingScript.ClassName ~= scriptData.type then
+                    warn(
+                        "[AI Plugin] Updated existing "
+                            .. existingScript.ClassName
+                            .. " named "
+                            .. scriptName
+                            .. " instead of creating requested "
+                            .. tostring(scriptData.type)
+                    )
+                end
+            else
+                local okScript, newScript = pcall(function()
+                    return Instance.new(scriptData.type)
+                end)
+
+                if not okScript then
+                    warn("[AI Plugin] Invalid script type: " .. tostring(scriptData.type))
+                else
+                    newScript.Name   = scriptName
+                    newScript.Source = scriptSource
+                    newScript.Parent = scriptParent
+                    table.insert(createdThisTurn, newScript)
+                end
             end
         end
     end
 
-    if #createdThisTurn > 0 or terrainOperationsApplied > 0 then
+    if #createdThisTurn > 0 or #updatedScriptsThisTurn > 0 or terrainOperationsApplied > 0 then
         table.insert(undoStack, {
             instances = createdThisTurn,
+            scriptUpdates = updatedScriptsThisTurn,
             terrainOperations = terrainOperationsApplied,
         })
     end
 
     return {
         createdInstances = #createdThisTurn,
+        updatedScripts = #updatedScriptsThisTurn,
         terrainOperations = terrainOperationsApplied,
-        totalChanges = #createdThisTurn + terrainOperationsApplied,
+        totalChanges = #createdThisTurn + #updatedScriptsThisTurn + terrainOperationsApplied,
     }
 end
 
@@ -1522,6 +2062,8 @@ end
 local function doGenerate(promptText)
     if not promptText or promptText:match("^%s*$") then return end
 
+    local localReferenceWarnings = flushReferenceInput(false)
+
     pendingPreview = nil
     nextPhasePrompt = nil
     setBusy(true)
@@ -1537,9 +2079,14 @@ local function doGenerate(promptText)
         or  promptText:sub(1, 4000)
     local targetParent = getCurrentTargetParent()
     local requestBaseUrl = normalizeBackendURL(BACKEND_URL) or BACKEND_URL
+    local referenceImagePayload = buildReferenceImagePayload()
+
     local requestPayload = HttpService:JSONEncode({
         prompt         = fullPrompt,
         conversationId = conversationId,
+        mode           = isDetailedMode and "detailed" or "quick",
+        generateEnv    = generateEnvironment,
+        referenceImages = referenceImagePayload,
     })
 
     local ok, response = pcall(function()
@@ -1584,15 +2131,28 @@ local function doGenerate(promptText)
                         }
                         showPreview(buildPreviewSummary(data, targetParent))
                         updateDemoViewers(data, targetParent, false)
-                        setApplyReady(true)
-                        setStatus("Preview ready. Review the backend response, then apply.", C.green)
+
+                        -- Hard-gate: block apply if validation found critical errors
+                        if type(data.validationErrors) == "table" and #data.validationErrors > 0 then
+                            setApplyReady(false)
+                            local errLines = { "Critical validation errors (apply blocked):" }
+                            for _, e in ipairs(data.validationErrors) do
+                                errLines[#errLines + 1] = "• " .. e
+                            end
+                            showError(table.concat(errLines, "\n"), nil,
+                                "The output has structural issues. Try rephrasing or simplifying your prompt.")
+                            setStatus("Preview has validation errors — apply is blocked.", C.orange)
+                        else
+                            setApplyReady(true)
+                            setStatus("Preview ready. Review the backend response, then apply.", C.green)
+                        end
                     else
                         updateDemoViewers(data, targetParent, false)
                         setStatus("Backend response contained no changes to apply.", C.subtext)
                     end
 
                     showExplain(explanation)
-                    showWarnings(combineWarnings(data.warnings, previewWarnings))
+                    showWarnings(combineWarnings(combineWarnings(data.warnings, previewWarnings), localReferenceWarnings))
                     updatePhaseUI(data)
                 end
             else
@@ -1629,6 +2189,52 @@ local function doGenerate(promptText)
 
     setBusy(false)
 end
+
+local function isShiftHeld()
+    return UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
+        or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+end
+
+local function isEnterKey(inputObject)
+    if not inputObject then
+        return false
+    end
+
+    return inputObject.KeyCode == Enum.KeyCode.Return
+        or inputObject.KeyCode == Enum.KeyCode.KeypadEnter
+end
+
+local pendingEnterSubmit = false
+
+UserInputService.InputBegan:Connect(function(inputObject)
+    if isGenerating then
+        return
+    end
+
+    if UserInputService:GetFocusedTextBox() ~= promptBox then
+        return
+    end
+
+    if not isEnterKey(inputObject) or isShiftHeld() then
+        return
+    end
+
+    pendingEnterSubmit = true
+    task.defer(function()
+        if UserInputService:GetFocusedTextBox() == promptBox then
+            promptBox:ReleaseFocus()
+        end
+    end)
+end)
+
+promptBox.FocusLost:Connect(function(enterPressed)
+    local shouldSubmit = pendingEnterSubmit or (enterPressed and not isShiftHeld())
+    pendingEnterSubmit = false
+
+    if shouldSubmit and not isGenerating then
+        doGenerate(promptBox.Text)
+    end
+end)
 
 -- ── Generate button ───────────────────────────────────────────
 generateBtn.MouseButton1Click:Connect(function()
@@ -1667,8 +2273,24 @@ undoBtn.MouseButton1Click:Connect(function()
     end
     local batch = table.remove(undoStack)
     local instances = type(batch) == "table" and batch.instances or batch
+    local scriptUpdates = type(batch) == "table" and batch.scriptUpdates or nil
     local terrainOperations = type(batch) == "table" and batch.terrainOperations or 0
     local count = 0
+    local restoredScripts = 0
+
+    if type(scriptUpdates) == "table" then
+        for _, entry in ipairs(scriptUpdates) do
+            if entry.script and entry.script.Parent then
+                local okRestore = pcall(function()
+                    entry.script.Source = entry.previousSource or ""
+                end)
+                if okRestore then
+                    restoredScripts += 1
+                end
+            end
+        end
+    end
+
     for _, inst in ipairs(instances) do
         if inst and inst.Parent then
             inst:Destroy()
@@ -1679,10 +2301,16 @@ undoBtn.MouseButton1Click:Connect(function()
     if terrainOperations > 0 then
         setStatus(
             string.format(
-                "Removed %d created item(s). %d terrain operation(s) from that generation cannot be undone automatically.",
+                "Removed %d created item(s), restored %d updated script(s). %d terrain operation(s) from that generation cannot be undone automatically.",
                 count,
+                restoredScripts,
                 terrainOperations
             ),
+            C.subtext
+        )
+    elseif restoredScripts > 0 then
+        setStatus(
+            string.format("Removed %d created item(s) and restored %d updated script(s).", count, restoredScripts),
             C.subtext
         )
     else
