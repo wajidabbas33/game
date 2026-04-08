@@ -239,8 +239,8 @@ PLANNING RULES
    - 96×96 for medium scenes
    - 128×128 for complex/large scenes
    - 192×192 for very large open-world scenes
-9. ALWAYS set environment.generateSurroundings to true for maps, islands, towns, outdoor scenes
-10. For interior scenes (classroom, lobby), still plan the outside world layer around it
+9. Set environment.generateSurroundings to true ONLY for outdoor maps, islands, towns, parks, arenas, and open-world scenes. Set it to false for pure interior scenes (office, corridor, classroom, lobby) — no outdoor grass or trees around an interior-only build.
+10. For interior-only prompts, do NOT add roads, trees, or exterior terrain in the environment block; the build is enclosed.
 11. Roads should connect to map edges and extend beyond the boundary
 12. Background structures should be at least 20 studs away from core area
 13. Return ONLY the JSON. No prose, no markdown, no explanation outside the JSON.`;
@@ -1131,8 +1131,13 @@ function validateSceneOutput(data, options = {}) {
             if (Array.isArray(props.Position)) {
                 const key = props.Position.map(n => Math.round(n * 10) / 10).join(',');
                 const existing = positionMap.get(key);
+                const n = String(props.Name || '').toLowerCase();
+                const ex = String(existing || '').toLowerCase();
+                const layeredPair = /(glass|pane|frame|mullion|partition|divider)/.test(n)
+                    && /(glass|pane|frame|mullion|partition|divider)/.test(ex);
                 if (existing && existing !== (props.Name || inst.className)
-                    && inst.className !== 'Model' && inst.className !== 'PointLight') {
+                    && inst.className !== 'Model' && inst.className !== 'PointLight'
+                    && !layeredPair) {
                     warnings.push(`"${props.Name || inst.className}" and "${existing}" share position [${key}]`);
                 }
                 positionMap.set(key, props.Name || inst.className);
@@ -1153,7 +1158,7 @@ function validateSceneOutput(data, options = {}) {
                 && inst.className !== 'Model' && !inst.className.includes('Light')) {
                 const maxDim = Math.max(...props.Size);
                 const minDim = Math.min(...props.Size.filter(s => s > 0));
-                const isRoadMarking = /centerline|lane|divider|crosswalk|roadmark|stonepath|path|walkway|pathway|pavement|sidewalk/i.test(name);
+                const isRoadMarking = /centerline|lane|divider|crosswalk|roadmark|stonepath|path|walkway|pathway|pavement|sidewalk|glasspartition|partition|roadsurface|centralopen|openarea|ceiling|panel|slab/i.test(name);
                 if (maxDim > 0 && minDim > 0 && maxDim / minDim > 200 && !isRoadMarking) {
                     warnings.push(`"${props.Name || inst.className}" has extreme aspect ratio (${maxDim}:${minDim})`);
                 }

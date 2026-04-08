@@ -49,6 +49,10 @@ const {
     applyLayoutHints,
 } = require('./scene-planner');
 const {
+    applyScenePlanProductionOverrides,
+    isInteriorPrompt,
+} = require('./scene-intent');
+const {
     analyzeReferenceImages,
     imageAnalysisToContext,
     normalizeReferenceImages,
@@ -244,6 +248,10 @@ const apiLimiter = rateLimit({
 //   • Task phasing so complex requests are broken into steps
 const SYSTEM_PROMPT = `You are an expert Roblox Luau developer embedded inside Roblox Studio.
 Your job is to help developers build server games using natural language commands.
+
+When the user provides BOTH a text prompt AND reference image(s):
+• The TEXT PROMPT defines scene type (interior vs outdoor), layout, and required objects.
+• Reference images inform STYLE ONLY: colors, materials, proportions, lighting — never override the prompt's scene type.
 
 ════════════════════════════════════════════════════════════
 OUTPUT FORMAT
@@ -2017,27 +2025,96 @@ function countEnvironmentSignals(instances, terrain) {
     return score;
 }
 
-const OUTDOOR_SCENE_TYPES = new Set([
+// Word-boundary outdoor keywords — avoid substring false positives (e.g. "map" inside unrelated words).
+const OUTDOOR_SCENE_KEYWORDS = [
     'park', 'outdoor', 'forest', 'island', 'town', 'street', 'arena',
-    'nature', 'garden', 'farm', 'beach', 'desert', 'tundra', 'map',
-]);
+    'nature', 'garden', 'farm', 'beach', 'desert', 'tundra', 'meadow',
+];
 
-function isOutdoorSceneType(scenePlan) {
-    const t = String(scenePlan?.sceneType || scenePlan?.title || '').toLowerCase();
-    for (const keyword of OUTDOOR_SCENE_TYPES) {
-        if (t.includes(keyword)) return true;
+function isOutdoorSceneType(scenePlan, prompt) {
+    if (prompt && isInteriorPrompt(prompt)) {
+        return false;
+    }
+    const t = String(scenePlan?.sceneType || '') + ' ' + String(scenePlan?.title || '');
+    const lower = t.toLowerCase();
+    for (const keyword of OUTDOOR_SCENE_KEYWORDS) {
+        const re = new RegExp(`\\b${keyword}\\b`, 'i');
+        if (re.test(lower)) return true;
     }
     return false;
 }
 
-function buildCoreStructureFallback(scenePlan) {
+function dedupeOverlappingPositions(instances) {
+    if (!Array.isArray(instances)) return instances;
+    const groups = new Map();
+    for (let i = 0; i < instances.length; i++) {
+        const pos = instances[i].properties?.Position;
+        if (!Array.isArray(pos) || pos.length !== 3) continue;
+        const key = pos.map(n => Math.round(n * 100) / 100).join(',');
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(i);
+    }
+    for (const indices of groups.values()) {
+        if (indices.length < 2) continue;
+        for (let j = 1; j < indices.length; j++) {
+            const i = indices[j];
+            const pos = instances[i].properties.Position;
+            instances[i].properties.Position = [
+                pos[0] + j * 0.12,
+                pos[1] + j * 0.04,
+                pos[2] + j * 0.12,
+            ];
+        }
+    }
+    return instances;
+}
+
+function clampExtremeAspectRatioParts(instances) {
+    if (!Array.isArray(instances)) return instances;
+    for (const inst of instances) {
+        if (!inst || inst.className === 'Model' || String(inst.className || '').includes('Light')) continue;
+        const sz = inst.properties?.Size;
+        if (!Array.isArray(sz) || sz.length !== 3) continue;
+        const [sx, sy, sz_] = sz;
+        const nums = [sx, sy, sz_].filter(n => typeof n === 'number' && n > 0);
+        if (nums.length < 2) continue;
+        const max = Math.max(...nums);
+        const min = Math.min(...nums);
+        if (min <= 0 || max / min <= 120) continue;
+        const idx = [sx, sy, sz_].indexOf(min);
+        const floor = 0.5;
+        if (idx === 0) inst.properties.Size[0] = Math.max(sx, floor);
+        else if (idx === 1) inst.properties.Size[1] = Math.max(sy, floor);
+        else inst.properties.Size[2] = Math.max(sz_, floor);
+    }
+    return instances;
+}
+
+function applyGeometrySanitizers(instances) {
+    if (!Array.isArray(instances) || instances.length === 0) return instances;
+    dedupeOverlappingPositions(instances);
+    clampExtremeAspectRatioParts(instances);
+    const flatNames = /path|walkway|pavement|sidewalk|slab|floor|ground|plaza|road|lane|centralopen|openarea|glass|partition|panel|ceiling|roadsurface|stonepath/i;
+    for (const inst of instances) {
+        if (inst?.properties?.Size && Array.isArray(inst.properties.Size) && inst.properties.Size.length === 3) {
+            const [sx, sy, sz] = inst.properties.Size;
+            const name = String(inst?.properties?.Name || '');
+            if (sy < 0.5 && flatNames.test(name)) {
+                inst.properties.Size = [sx, 0.5, sz];
+            }
+        }
+    }
+    return instances;
+}
+
+function buildCoreStructureFallback(scenePlan, prompt) {
     const dims = scenePlan?.dimensions || { width: 128, depth: 128 };
     const groundLevel = scenePlan?.groundLevel || 0;
     const cx = 0;
     const cz = 0;
 
     // Outdoor/open scenes → open pavilion gazebo, not a closed building
-    if (isOutdoorSceneType(scenePlan)) {
+    if (isOutdoorSceneType(scenePlan, prompt)) {
         const pavW = Math.max(16, Math.min(32, Math.round(dims.width * 0.18)));
         const pavD = Math.max(14, Math.min(28, Math.round(dims.depth * 0.16)));
         const roofH = 8;
@@ -2592,8 +2669,14 @@ app.post('/generate', apiLimiter, async (req, res) => {
 
         if (generationMode === 'detailed' && !isContinuePrompt(prompt) && !isContextualFollowUpPrompt(prompt, session)) {
             console.log('🔬 Detailed mode: running scene planner...');
+            const promptPriorityBlock = `CRITICAL — PROMPT vs REFERENCE PRIORITY:
+1. The user's TEXT PROMPT defines scene type (interior office vs outdoor park vs arena). Plan and build THAT scene type.
+2. Reference images (if any) inform STYLE ONLY: colors, materials, proportions, lighting — NOT a different layout or scene type than the prompt.
+3. If the image depicts a different kind of place than the prompt, follow the PROMPT for structure and layout; use the image for palette and detail only.`;
+
             const plannerMessages = [
                 { role: 'system', content: SCENE_PLANNER_PROMPT },
+                { role: 'system', content: promptPriorityBlock },
             ];
             if (imageContext) {
                 plannerMessages.push({ role: 'system', content: imageContext });
@@ -2619,11 +2702,8 @@ app.post('/generate', apiLimiter, async (req, res) => {
                 const planRaw = getCompletionText(planCompletion.choices[0].message || {});
                 try {
                     scenePlan = parseJsonResponse(planRaw);
-                    // Server-side enforcement: ensure environment always generates
-                    // for scene prompts when the user hasn't explicitly toggled it off.
-                    if (generateEnv !== false && scenePlan.environment) {
-                        scenePlan.environment.generateSurroundings = true;
-                    }
+                    const overrideMeta = applyScenePlanProductionOverrides(prompt, scenePlan, generateEnv);
+                    console.log(`[${requestId}] scene-intent=${overrideMeta.intent.mode} generateSurroundings=${!!scenePlan.environment?.generateSurroundings}`);
                     const planValidation = validateScenePlan(scenePlan);
                     if (planValidation.warnings.length > 0) {
                         console.warn('Scene plan warnings:', planValidation.warnings);
@@ -2652,6 +2732,7 @@ app.post('/generate', apiLimiter, async (req, res) => {
                         );
                         const repairRaw = getCompletionText(repairCompletion.choices[0].message || {});
                         scenePlan = parseJsonResponse(repairRaw);
+                        applyScenePlanProductionOverrides(prompt, scenePlan, generateEnv);
                         const repairedValidation = validateScenePlan(scenePlan);
                         if (repairedValidation.warnings.length > 0) {
                             console.warn('Scene plan warnings (repair):', repairedValidation.warnings);
@@ -2662,6 +2743,7 @@ app.post('/generate', apiLimiter, async (req, res) => {
                         console.warn('⚠️  Scene planner repair failed, using deterministic ScenePlan fallback:', planRepairErr.message);
                         if (isSceneLikePrompt(prompt)) {
                             scenePlan = buildDeterministicScenePlan(prompt);
+                            applyScenePlanProductionOverrides(prompt, scenePlan, generateEnv);
                             scenePlanText = JSON.stringify(scenePlan, null, 2);
                             console.log('✅ Deterministic ScenePlan fallback injected');
                         } else {
@@ -2673,6 +2755,7 @@ app.post('/generate', apiLimiter, async (req, res) => {
                 console.warn('⚠️  Scene planner failed, using deterministic ScenePlan fallback:', planErr.message);
                 if (isSceneLikePrompt(prompt)) {
                     scenePlan = buildDeterministicScenePlan(prompt);
+                    applyScenePlanProductionOverrides(prompt, scenePlan, generateEnv);
                     scenePlanText = JSON.stringify(scenePlan, null, 2);
                     usedDeterministicScenePlan = true;
                     console.log('✅ Deterministic ScenePlan fallback injected');
@@ -2699,6 +2782,10 @@ app.post('/generate', apiLimiter, async (req, res) => {
         // In two-pass, the visual analysis reinforces the plan already embedded above,
         // keeping colors, style, and object types visible to the builder pass.
         if (imageContext) {
+            messages.push({
+                role: 'system',
+                content: 'PROMPT PRIORITY: The user\'s text prompt defines scene type and layout. The reference image block below is for colors, materials, lighting, and proportions — not for overriding the prompt\'s scene type.',
+            });
             messages.push({ role: 'system', content: imageContext });
         }
 
@@ -2918,22 +3005,6 @@ app.post('/generate', apiLimiter, async (req, res) => {
             }
         }
 
-        // ── Minimum thickness enforcer ───────────────────────────────
-        // Flat path/slab objects with Y < 0.5 look like decals and cause
-        // extreme aspect-ratio warnings. Clamp them to at least 0.5 studs.
-        const FLAT_SURFACE_NAMES = /path|walkway|pavement|sidewalk|slab|floor|ground|plaza|road|lane/i;
-        if (Array.isArray(safe.instances)) {
-            for (const inst of safe.instances) {
-                if (inst?.properties?.Size && Array.isArray(inst.properties.Size) && inst.properties.Size.length === 3) {
-                    const [sx, sy, sz] = inst.properties.Size;
-                    const name = String(inst?.properties?.Name || '');
-                    if (sy < 0.5 && FLAT_SURFACE_NAMES.test(name)) {
-                        inst.properties.Size = [sx, 0.5, sz];
-                    }
-                }
-            }
-        }
-
         // ── Merge template-resolved objects (Detailed mode) ─
         if (scenePlan) {
             try {
@@ -2995,14 +3066,14 @@ app.post('/generate', apiLimiter, async (req, res) => {
             && safe.totalPhases > 1
         ) {
             const structuralCount = countStructuralInstances(safe.instances || []);
-            const isOutdoor = isOutdoorSceneType(scenePlan);
+            const isOutdoor = isOutdoorSceneType(scenePlan, prompt);
             // For outdoor scenes: inject pavilion only if less than 3 any structures exist.
             // For indoor scenes: require closed shell (floor + roof + 2+ walls).
             const needsFallback = isOutdoor
                 ? structuralCount < 3 && !hasExistingLayoutShell(safe.instances || [])
                 : (structuralCount < 4 || !hasClosedShell(safe.instances || [])) && !hasExistingLayoutShell(safe.instances || []);
             if (needsFallback) {
-                const fallbackStructure = buildCoreStructureFallback(scenePlan);
+                const fallbackStructure = buildCoreStructureFallback(scenePlan, prompt);
                 safe.instances = [...(safe.instances || []), ...fallbackStructure];
                 safe.warnings = [
                     ...(safe.warnings || []),
@@ -3010,6 +3081,10 @@ app.post('/generate', apiLimiter, async (req, res) => {
                 ];
                 console.log(`[${requestId}] injected core structure fallback for phase-1 coherence`);
             }
+        }
+
+        if (Array.isArray(safe.instances) && safe.instances.length > 0) {
+            applyGeometrySanitizers(safe.instances);
         }
 
         // ── Scene validation ─────────────────────────────────

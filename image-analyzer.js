@@ -480,26 +480,26 @@ function imageAnalysisToContext(analysis) {
     if (analysis.raw) {
         return [
             '════════════════════════════════════════════════════════',
-            'REFERENCE IMAGE DIRECTIVES (high priority — follow exactly)',
+            'REFERENCE IMAGE — STYLE ONLY',
             '════════════════════════════════════════════════════════',
-            'A reference image was analyzed. Apply these observations to the scene:',
+            'A reference image was analyzed. Use these notes for colors, materials, and style.',
+            'The user\'s TEXT PROMPT defines scene type and layout; do not override it with the image.',
             analysis.notes || '',
-            'You MUST reflect the visual style, colors, and object types described above.',
             '════════════════════════════════════════════════════════',
         ].join('\n');
     }
 
     const lines = [
         '════════════════════════════════════════════════════════',
-        'REFERENCE IMAGE DIRECTIVES (high priority — follow exactly)',
+        'REFERENCE IMAGE — STYLE AND MATERIALS (not scene-type override)',
         '════════════════════════════════════════════════════════',
-        'The user attached a reference image. You MUST use these findings to drive the scene:',
+        'The user attached a reference image. Use it for colors, materials, lighting, proportions, and spatial layout hints.',
+        'CRITICAL: If the user\'s TEXT PROMPT describes a different kind of place than the image (e.g. prompt says office interior, image shows a park), you MUST follow the USER PROMPT for structure and layout. Use the image ONLY for palette, materials, and detail — never replace the prompt\'s scene type.',
         '',
     ];
 
-    // Scene type — override if the analysis is confident
     if (analysis.sceneType && analysis.sceneType !== 'custom') {
-        lines.push(`SCENE TYPE: Build a "${analysis.sceneType}" scene matching the reference.`);
+        lines.push(`REFERENCE SCENE TYPE (hint only): The image resembles "${analysis.sceneType}". Use this only if it matches the user prompt; otherwise ignore it and follow the prompt.`);
     }
 
     // Style — drives material choices, color palette, and object type selection
@@ -529,7 +529,7 @@ function imageAnalysisToContext(analysis) {
     // Objects — must be included in the scene
     if (Array.isArray(analysis.objects) && analysis.objects.length > 0) {
         const names = analysis.objects.map(o => typeof o === 'string' ? o : (o.name || String(o)));
-        lines.push(`REQUIRED OBJECTS: You MUST include the following objects from the reference: ${names.join(', ')}. Use templates when available, otherwise generate full instances.`);
+        lines.push(`OBJECTS FROM IMAGE (include only those compatible with the user prompt): ${names.join(', ')}. Skip objects that do not fit the prompt\'s scene type.`);
     }
 
     // Layout — spatial arrangement instruction
@@ -596,7 +596,7 @@ function imageAnalysisToContext(analysis) {
 
     // Atmosphere — indoor/outdoor/underground
     if (analysis.atmosphere) {
-        lines.push(`ATMOSPHERE: Scene is "${analysis.atmosphere}". Adjust sky, lighting, and enclosure accordingly.`);
+        lines.push(`ATMOSPHERE (from image): "${analysis.atmosphere}". Apply only if consistent with the user prompt (e.g. do not force outdoor sky if the prompt is an interior office).`);
     }
 
     // Floor and wall surface patterns
