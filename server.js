@@ -44,6 +44,9 @@ const {
     resolveScenePlanTemplates,
     generateEnvironment,
     validateSceneOutput,
+    scoreSceneCoherence,
+    generatePreviewData,
+    applyLayoutHints,
 } = require('./scene-planner');
 const {
     analyzeReferenceImages,
@@ -72,7 +75,12 @@ function validateEnvironment() {
 }
 validateEnvironment();
 
-// ── Provider selection ───────────────────────────────────────
+// ── Provider selection (MODULAR) ─────────────────────────────
+// The AI provider is fully abstracted. To add a new provider:
+//   1. Add an entry to PROVIDER_CONFIG with apiKey, model, baseURL
+//   2. The rest of the pipeline (prompts, parsing, validation) works unchanged
+//   3. Vision model can be swapped independently via VISION_MODEL env var
+//
 // AI_PROVIDER=qwen    → use Qwen via DashScope OpenAI-compatible API
 // AI_PROVIDER=openai  → use OpenAI GPT-4o
 // Not set              → prefer Qwen if key exists, else OpenAI
@@ -122,7 +130,67 @@ const aiClient = new OpenAI({
     ...(ACTIVE_PROVIDER.baseURL ? { baseURL: ACTIVE_PROVIDER.baseURL } : {}),
 });
 
+// ── Fast planner client ───────────────────────────────────────
+// The scene planner only needs to produce a structured JSON plan.
+// Use qwen-turbo (5-10x faster) so it completes well inside the
+// 20s timeout, leaving the full model budget for the builder pass.
+const PLANNER_MODEL = process.env.PLANNER_MODEL
+    || (AI_PROVIDER === 'qwen' ? 'qwen-turbo' : 'gpt-4o-mini');
+const plannerClient = new OpenAI({
+    apiKey: ACTIVE_PROVIDER.apiKey,
+    ...(ACTIVE_PROVIDER.baseURL ? { baseURL: ACTIVE_PROVIDER.baseURL } : {}),
+});
+const PLANNER_TARGET = {
+    client: plannerClient,
+    provider: ACTIVE_PROVIDER,
+    model: PLANNER_MODEL,
+    routed: false,
+};
+
 console.log(`🤖  AI Provider: ${ACTIVE_PROVIDER.displayName} → model: ${AI_MODEL}`);
+console.log(`📐  Scene planner: ${PLANNER_MODEL}`);
+
+function getVisionRoutingTarget() {
+    const fallbackVisionModel = AI_PROVIDER === 'qwen' ? 'qwen-vl-plus' : 'gpt-4o-mini';
+    const visionModel = process.env.VISION_MODEL || fallbackVisionModel;
+    const visionApiKey = process.env.VISION_API_KEY || ACTIVE_PROVIDER.apiKey;
+    if (!visionApiKey || !visionModel) {
+        return null;
+    }
+
+    const visionBaseURL = process.env.VISION_BASE_URL
+        || ACTIVE_PROVIDER.baseURL
+        || undefined;
+    const visionClient = new OpenAI({
+        apiKey: visionApiKey,
+        ...(visionBaseURL ? { baseURL: visionBaseURL } : {}),
+    });
+
+    return {
+        client: visionClient,
+        provider: ACTIVE_PROVIDER,
+        model: visionModel,
+        routed: true,
+    };
+}
+
+function getGenerationTarget(hasReferenceImages) {
+    const useVisionForGeneration = String(process.env.USE_VISION_FOR_GENERATION || '').toLowerCase() === 'true';
+    if (hasReferenceImages && useVisionForGeneration) {
+        return getVisionRoutingTarget() || {
+            client: aiClient,
+            provider: ACTIVE_PROVIDER,
+            model: AI_MODEL,
+            routed: false,
+        };
+    }
+    return {
+        client: aiClient,
+        provider: ACTIVE_PROVIDER,
+        model: AI_MODEL,
+        routed: false,
+    };
+}
 
 // ── App setup ────────────────────────────────────────────────
 const app    = express();
@@ -366,6 +434,37 @@ When the user asks for NPCs, enemies, bosses, or shopkeepers:
   • Add the server scripts that control patrol, chase, combat, dialog, or shop logic.
   • Give NPCs and spawn points explicit names like GuardNPC, VendorNPC, EnemySpawn1.
 
+── OBBY / OBSTACLE COURSE ───────────────────────────────
+Required:
+  • 10+ obstacle platforms with escalating difficulty:
+    Stage 1-3: Wide simple jumps (Part, Anchored).
+    Stage 4-6: Rotating or moving parts using TweenService or BodyPosition in a Script.
+    Stage 7-9: Kill bricks (SmoothPlastic, red, Touched → Humanoid:TakeDamage(100)).
+    Stage 10: Jump pad (Touched → VectorForce or impulse to launch player upward) and Finish pad.
+  • CheckpointSystem (Script → ServerScriptService):
+    - Stores last touched checkpoint per player using a dictionary keyed by UserId.
+    - On CharacterAdded fires player to respawn at their checkpoint CFrame.
+    - Each checkpoint Part has a Touched event; only advances if new checkpoint index > current.
+  • CourseUI (LocalScript → StarterPlayerScripts):
+    - Shows current checkpoint number and total stages.
+
+── TYCOON ───────────────────────────────────────────────
+Required:
+  • PlotManager (Script → ServerScriptService):
+    - Creates N plot models in Workspace (one per player slot).
+    - Assigns a plot to each player on PlayerAdded; releases it on PlayerRemoving.
+    - Each plot: a BasePlate, a CollectorPad, and initially locked BuildPads.
+  • CollectorPad mechanic:
+    - A Part with a Touched event that awards cash (IntValue "Cash" in leaderstats) every 2 seconds while the player stands on it.
+  • PurchasePad system:
+    - Each BuildPad Part has a BillboardGui showing the price (e.g. "Buy for $100").
+    - On Touched, checks if player has enough Cash, deducts it, unlocks the next structure (sets Transparency to 0, CanCollide true).
+  • LeaderboardManager (Script → ServerScriptService):
+    - Creates leaderstats / Cash IntValue on PlayerAdded.
+    - DataStoreService:GetDataStore("TycoonData") to save/load cash.
+  • TycoonUI (LocalScript → StarterPlayerScripts):
+    - Shows current cash balance updated via RemoteEvent.
+
 ── SOUND / AUDIO SYSTEMS ──────────────────────────────────
 When the user asks for music, ambience, beeps, or sound effects:
   • Generate Sound instances with clear names like RoundMusic, CaptureSFX, LobbyAmbience.
@@ -404,6 +503,34 @@ Object spacing (center to center):
   • Flower clusters: 3–6 studs apart
   • Park benches: 15–25 studs apart
   • Buildings on street: 20–40 studs apart
+
+LAYOUT HINT (server-computed positions):
+Instead of guessing exact positions for repeated objects, use a layoutHint property.
+The backend will compute exact grid/row/ring coordinates automatically.
+
+  "properties": {
+    "Name": "ClassroomDesk",
+    "Size": [5, 3.4, 3],
+    "Color": [200, 180, 140],
+    "Anchored": true,
+    "Material": "Wood",
+    "layoutHint": {
+      "pattern": "grid",
+      "count": 12,
+      "center": [0, 1.7, 0],
+      "spacing": 7,
+      "elevation": 1.7
+    }
+  }
+
+Pattern options:
+  • "grid"      — N×M grid (best for desks, chairs, crates, spawn pads)
+  • "row"       — single line (best for benches, trophies, shelves)
+  • "ring"      — circle (best for trees around a center, pillars, obstacles)
+  • "perimeter" — along 4 sides of a rectangle (best for boundary props)
+  • "diagonal"  — diagonal line (best for obby platforms)
+
+USE layoutHint whenever placing 3+ identical or similar objects.
 
 Color palettes (use curated palettes, not raw primary colors):
   • Natural grass:     [67, 140, 49] to [82, 158, 58]
@@ -957,15 +1084,16 @@ function estimateMaxTokens(prompt, session, mode) {
     const isSystemHeavyPrompt = /\b(survival|waves?|npc|enemy|enemies|capture the flag|king of the hill|leaderboard|datastore)\b/.test(text)
         && /\b(system|manager|spawn|timer|team|score|round|ai)\b/.test(text);
 
-    // Detailed mode gets higher token budgets for richer output
+    // Detailed mode — scene planner handles structural work, builder needs focused output
+    // Keep under 3500 so qwen-plus finishes in ~15-20s (well within the 50s timeout)
     if (mode === 'detailed') {
         if (isContinuePrompt(text) || isContextualFollowUpPrompt(prompt, session)) {
-            return 3000;
+            return 2500;
         }
         if (looksComplexPrompt(text) || isSystemHeavyPrompt) {
-            return 5000;
+            return 3500;
         }
-        return 4000;
+        return 3000;
     }
 
     // Quick mode (single-pass) — original limits raised slightly
@@ -1616,7 +1744,434 @@ function buildMapLayoutFallback(prompt) {
 }
 
 function buildDeterministicFallback(prompt) {
+    const text = String(prompt || '').toLowerCase();
+    if (/\b(scene|map|island|terrain|campus|building|classroom|arena|lobby|town|world|layout|architecture|school|interior)\b/.test(text)) {
+        return {
+            explanation: "Created a core map shell for phase 1. Reply 'continue' for phase 2.",
+            complexity: 'complex',
+            phases: [
+                'Phase 1: Build core structure and base layout',
+                'Phase 2: Add gameplay structures and interior/exterior details',
+                'Phase 3: Add exterior environment, boundaries, and polish',
+            ],
+            currentPhase: 1,
+            totalPhases: 3,
+            instances: [
+                { className: 'Model', parent: 'Workspace', properties: { Name: 'MainStructure' } },
+                { className: 'Part', parent: 'MainStructure', properties: { Name: 'MainFloor', Size: [52, 1, 34], Position: [0, 0.5, 0], Color: [212, 212, 205], Anchored: true, Material: 'Concrete' } },
+                { className: 'Part', parent: 'MainStructure', properties: { Name: 'MainRoof', Size: [52, 1, 34], Position: [0, 14.5, 0], Color: [150, 150, 160], Anchored: true, Material: 'Concrete' } },
+                { className: 'Part', parent: 'MainStructure', properties: { Name: 'WallNorth', Size: [52, 14, 1], Position: [0, 7, -17], Color: [236, 236, 236], Anchored: true, Material: 'Concrete' } },
+                { className: 'Part', parent: 'MainStructure', properties: { Name: 'WallSouth', Size: [52, 14, 1], Position: [0, 7, 17], Color: [236, 236, 236], Anchored: true, Material: 'Concrete' } },
+                { className: 'Part', parent: 'MainStructure', properties: { Name: 'WallWest', Size: [1, 14, 34], Position: [-26, 7, 0], Color: [236, 236, 236], Anchored: true, Material: 'Concrete' } },
+                { className: 'Part', parent: 'MainStructure', properties: { Name: 'WallEast', Size: [1, 14, 34], Position: [26, 7, 0], Color: [236, 236, 236], Anchored: true, Material: 'Concrete' } },
+                { className: 'Part', parent: 'MainStructure', properties: { Name: 'MainEntrance', Size: [4, 7, 0.4], Position: [0, 3.5, 17.3], Color: [102, 74, 48], Anchored: true, Material: 'Wood' } },
+                { className: 'Part', parent: 'Workspace', properties: { Name: 'PrimarySpawn', Size: [8, 1, 8], Position: [0, 1, 24], Color: [103, 192, 128], Anchored: true, Material: 'SmoothPlastic' } },
+            ],
+            terrain: [],
+            scripts: [],
+        };
+    }
     return buildTerrainFallback(prompt) || buildMapLayoutFallback(prompt);
+}
+
+function buildDeterministicScenePlan(prompt) {
+    const text = String(prompt || '').toLowerCase();
+    const isIsland = /\b(island|floating)\b/.test(text);
+    const isSchoolLike = /\b(class|classroom|school|academy|campus)\b/.test(text);
+    const isCTF = /\b(capture the flag|ctf|flag)\b/.test(text);
+    const isSurvival = /\b(survival|wave|waves|zombie|enemy)\b/.test(text);
+    const isArena = /\b(arena|pvp|battle|combat)\b/.test(text);
+    const sceneType = isIsland ? 'floating_island' : (isSchoolLike ? 'classroom' : 'custom');
+    const dims = isIsland ? { width: 180, depth: 180, height: 48 } : { width: 140, depth: 140, height: 40 };
+    const boundaryType = isIsland ? 'water_border' : 'terrain_fade';
+
+    const objects = [
+        { type: 'custom', name: 'MainStructure', className: 'Model', description: 'Primary playable structure centered in map', position: [0, 0, 0], size: [52, 16, 36], material: 'Concrete', color: [220, 220, 220] },
+        { template: 'stone_path', count: 4, zone: 'core_play_area', spacing: 'line', notes: 'Connect center structure to edges' },
+        { template: 'deciduous_tree_medium', count: 8, zone: 'outer_environment', spacing: 'scattered', notes: 'Keep away from core playable structure' },
+        { template: 'street_lamp', count: 4, zone: 'outer_environment', spacing: 'along_path', notes: 'Perimeter lighting' },
+    ];
+
+    if (isSchoolLike) {
+        objects.push(
+            { template: 'desk', count: 8, zone: 'core_play_area', spacing: 'grid', notes: 'Interior classroom layout' },
+            { template: 'chair', count: 8, zone: 'core_play_area', spacing: 'grid', notes: 'Pair with desks' }
+        );
+    }
+    if (isCTF) {
+        objects.push(
+            { type: 'custom', name: 'RedBase', className: 'Model', description: 'Red team base platform', position: [-32, 0, 0], size: [18, 3, 18], material: 'Concrete', color: [205, 88, 88] },
+            { type: 'custom', name: 'BlueBase', className: 'Model', description: 'Blue team base platform', position: [32, 0, 0], size: [18, 3, 18], material: 'Concrete', color: [95, 162, 255] },
+            { type: 'custom', name: 'CenterObjective', className: 'Model', description: 'Center objective marker', position: [0, 0, 0], size: [8, 6, 8], material: 'Metal', color: [230, 210, 80] }
+        );
+    }
+    if (isSurvival) {
+        objects.push(
+            { type: 'custom', name: 'DefenseZone', className: 'Model', description: 'Player defense zone', position: [0, 0, 0], size: [24, 2, 24], material: 'Concrete', color: [180, 180, 180] },
+            { type: 'custom', name: 'EnemySpawnRing', className: 'Model', description: 'Spawn ring around play area', position: [0, 0, 0], size: [120, 2, 120], material: 'Ground', color: [120, 115, 105] }
+        );
+    }
+    if (isArena && !isCTF) {
+        objects.push(
+            { type: 'custom', name: 'ArenaCenter', className: 'Model', description: 'Central arena combat zone', position: [0, 0, 0], size: [28, 2, 28], material: 'Concrete', color: [170, 170, 176] },
+            { template: 'rock_formation', count: 4, zone: 'core_play_area', spacing: 'scattered', notes: 'Cover objects for combat flow' }
+        );
+    }
+
+    return {
+        sceneType,
+        title: isSchoolLike ? 'Deterministic School Map Plan' : 'Deterministic Game Map Plan',
+        dimensions: dims,
+        groundLevel: 0,
+        zones: [
+            {
+                name: 'core_play_area',
+                purpose: 'Main playable structure and immediate interaction area',
+                bounds: { minX: -36, maxX: 36, minZ: -30, maxZ: 30 },
+                elevation: 0,
+                terrainMaterial: 'Grass',
+            },
+            {
+                name: 'outer_environment',
+                purpose: 'Surroundings, paths, props, and boundary transition',
+                bounds: { minX: -80, maxX: 80, minZ: -80, maxZ: 80 },
+                elevation: 0,
+                terrainMaterial: 'Grass',
+            },
+        ],
+        objects,
+        lighting: {
+            timeOfDay: 'golden_hour',
+            ambience: 'warm',
+            fogDensity: 'light',
+            pointLightCount: 4,
+            pointLightColor: [255, 220, 140],
+        },
+        environment: {
+            generateSurroundings: true,
+            boundaryType,
+            surroundingTerrain: 'Grass',
+            surroundingElements: ['trees_sparse', 'roads', 'benches', 'background_structures', 'rocks_scattered'],
+            mapBoundarySize: { width: dims.width, depth: dims.depth },
+        },
+        colorPalette: {
+            primary: [82, 158, 58],
+            secondary: [148, 148, 140],
+            accent: [255, 220, 140],
+            style: 'modern_clean',
+        },
+    };
+}
+
+function buildDeterministicBoundaryInstances(scenePlan) {
+    const env = scenePlan?.environment || {};
+    const dims = scenePlan?.dimensions || { width: 128, depth: 128 };
+    const mapWidth = env.mapBoundarySize?.width || dims.width * 1.6;
+    const mapDepth = env.mapBoundarySize?.depth || dims.depth * 1.6;
+    const halfW = mapWidth / 2;
+    const halfD = mapDepth / 2;
+    const wallHeight = 22;
+    const boundaryType = env.boundaryType || 'invisible_walls';
+    const makeWall = (name, size, pos) => ({
+        className: 'Part',
+        parent: 'Workspace',
+        properties: {
+            Name: name,
+            Size: size,
+            Position: pos,
+            Anchored: true,
+            Transparency: 1,
+            CanCollide: true,
+        },
+    });
+
+    if (boundaryType === 'water_border') {
+        return [
+            makeWall('WaterBoundN', [mapWidth + 20, wallHeight, 2], [0, wallHeight / 2, -halfD - 10]),
+            makeWall('WaterBoundS', [mapWidth + 20, wallHeight, 2], [0, wallHeight / 2, halfD + 10]),
+            makeWall('WaterBoundW', [2, wallHeight, mapDepth + 20], [-halfW - 10, wallHeight / 2, 0]),
+            makeWall('WaterBoundE', [2, wallHeight, mapDepth + 20], [halfW + 10, wallHeight / 2, 0]),
+        ];
+    }
+
+    return [
+        makeWall('BoundaryNorth', [mapWidth, wallHeight, 2], [0, wallHeight / 2, -halfD]),
+        makeWall('BoundarySouth', [mapWidth, wallHeight, 2], [0, wallHeight / 2, halfD]),
+        makeWall('BoundaryWest', [2, wallHeight, mapDepth], [-halfW, wallHeight / 2, 0]),
+        makeWall('BoundaryEast', [2, wallHeight, mapDepth], [halfW, wallHeight / 2, 0]),
+    ];
+}
+
+function isSceneLikePrompt(prompt) {
+    const text = String(prompt || '').toLowerCase();
+    return /\b(scene|map|island|terrain|campus|building|classroom|arena|lobby|town|world|layout|architecture)\b/.test(text);
+}
+
+function inferRequestedPhase(prompt, session) {
+    if (!session?.lastResponse) {
+        return 1;
+    }
+    if (isContinuePrompt(prompt)) {
+        return Math.min(
+            (session.lastResponse.currentPhase || 1) + 1,
+            session.lastResponse.totalPhases || 1
+        );
+    }
+    return session.lastResponse.currentPhase || 1;
+}
+
+function buildPhaseExecutionSystemMessage(prompt, session) {
+    if (!isSceneLikePrompt(prompt)) {
+        return null;
+    }
+
+    const phase = inferRequestedPhase(prompt, session);
+    if (phase <= 1) {
+        return [
+            'PHASE 1 EXECUTION RULES (MANDATORY):',
+            '1) Create a coherent core structure first (floor + walls + roof + entrance) and keep it centered.',
+            '2) Include at least one named root model for the primary build.',
+            '3) Do not return terrain-only or decor-only output for phase 1.',
+            '4) Keep environment light in phase 1; prioritize architecture and primary layout anchors.',
+        ].join(' ');
+    }
+    if (phase === 2) {
+        return [
+            'PHASE 2 EXECUTION RULES (MANDATORY):',
+            '1) Expand and detail the primary structure created in phase 1 (interior objects, gameplay-relevant layout pieces).',
+            '2) Add connected structures/paths and playable navigation flow, not random scattered props.',
+            '3) Preserve phase-1 anchors and names where possible; avoid replacing the entire map shell.',
+            '4) Include meaningful object density for the core play area.',
+        ].join(' ');
+    }
+    return [
+        'PHASE 3 EXECUTION RULES (MANDATORY):',
+        '1) Finalize world composition around the main build (surrounding terrain, roads/paths, props, background structures).',
+        '2) Ensure explicit map boundaries for a complete playable area.',
+        '3) Add polish and consistency (lighting/environment coherence) without breaking prior phases.',
+        '4) Output should feel complete and game-ready, not an isolated build on empty baseplate.',
+    ].join(' ');
+}
+
+function countStructuralInstances(instances) {
+    if (!Array.isArray(instances)) {
+        return 0;
+    }
+    const structuralNamePattern = /(mainbuilding|building|class(room)?|school|room|hall|lobby|arena|base|house|tower|office|wall|roof|floor|door|window)/i;
+    return instances.reduce((count, inst) => {
+        const name = String(inst?.properties?.Name || '');
+        const cls = String(inst?.className || '');
+        const isRoadLike = /(road|path|lamp|bench|tree|flower|rock|pond|boundary)/i.test(name);
+        if (structuralNamePattern.test(name) && !isRoadLike) {
+            return count + 1;
+        }
+        return count;
+    }, 0);
+}
+
+function hasClosedShell(instances) {
+    if (!Array.isArray(instances) || instances.length === 0) {
+        return false;
+    }
+    const names = new Set(
+        instances
+            .map(inst => String(inst?.properties?.Name || '').toLowerCase())
+            .filter(Boolean)
+    );
+    const hasFloor = [...names].some(name => /floor/.test(name));
+    const hasRoof = [...names].some(name => /roof/.test(name));
+    const wallCount = [...names].filter(name => /wall/.test(name)).length;
+    return hasFloor && hasRoof && wallCount >= 2;
+}
+
+function hasExistingLayoutShell(instances) {
+    if (!Array.isArray(instances)) {
+        return false;
+    }
+    const names = instances
+        .map(inst => String(inst?.properties?.Name || '').toLowerCase())
+        .filter(Boolean);
+    const hasArenaShell = names.some(name => /(arenafloor|northwall|southwall|eastwall|westwall|arena)/.test(name));
+    const hasClassShell = names.some(name => /(classroomfloor|classroomroof|wallnorth|wallsouth|wallwest|walleast|schoolbuilding|mainbuilding)/.test(name));
+    return hasArenaShell || hasClassShell;
+}
+
+function countEnvironmentSignals(instances, terrain) {
+    let score = 0;
+    if (Array.isArray(instances)) {
+        for (const inst of instances) {
+            const name = String(inst?.properties?.Name || '').toLowerCase();
+            if (/(road|path|tree|rock|flower|bench|lamp|boundary|waterbound|bgbuilding)/.test(name)) {
+                score += 1;
+            }
+        }
+    }
+    if (Array.isArray(terrain)) {
+        for (const op of terrain) {
+            const material = String(op?.material || '').toLowerCase();
+            if (/(grass|ground|rock|water|sand|mud|snow)/.test(material)) {
+                score += 1;
+            }
+        }
+    }
+    return score;
+}
+
+const OUTDOOR_SCENE_TYPES = new Set([
+    'park', 'outdoor', 'forest', 'island', 'town', 'street', 'arena',
+    'nature', 'garden', 'farm', 'beach', 'desert', 'tundra', 'map',
+]);
+
+function isOutdoorSceneType(scenePlan) {
+    const t = String(scenePlan?.sceneType || scenePlan?.title || '').toLowerCase();
+    for (const keyword of OUTDOOR_SCENE_TYPES) {
+        if (t.includes(keyword)) return true;
+    }
+    return false;
+}
+
+function buildCoreStructureFallback(scenePlan) {
+    const dims = scenePlan?.dimensions || { width: 128, depth: 128 };
+    const groundLevel = scenePlan?.groundLevel || 0;
+    const cx = 0;
+    const cz = 0;
+
+    // Outdoor/open scenes → open pavilion gazebo, not a closed building
+    if (isOutdoorSceneType(scenePlan)) {
+        const pavW = Math.max(16, Math.min(32, Math.round(dims.width * 0.18)));
+        const pavD = Math.max(14, Math.min(28, Math.round(dims.depth * 0.16)));
+        const roofH = 8;
+        const pillarH = 7;
+        const pillarSize = 1.2;
+        const offsets = [
+            [-pavW / 2 + 1, -pavD / 2 + 1],
+            [ pavW / 2 - 1, -pavD / 2 + 1],
+            [-pavW / 2 + 1,  pavD / 2 - 1],
+            [ pavW / 2 - 1,  pavD / 2 - 1],
+        ];
+        const pillars = offsets.map(([ox, oz], i) => ({
+            className: 'Part',
+            parent: 'Pavilion',
+            properties: {
+                Name: `PavilionPillar${i + 1}`,
+                Size: [pillarSize, pillarH, pillarSize],
+                Position: [cx + ox, groundLevel + pillarH / 2, cz + oz],
+                Color: [210, 200, 185],
+                Anchored: true,
+                Material: 'SmoothPlastic',
+            },
+        }));
+        return [
+            { className: 'Model', parent: 'Workspace', properties: { Name: 'Pavilion' } },
+            {
+                className: 'Part',
+                parent: 'Pavilion',
+                properties: {
+                    Name: 'PavilionRoof',
+                    Size: [pavW, 1, pavD],
+                    Position: [cx, groundLevel + roofH, cz],
+                    Color: [160, 130, 100],
+                    Anchored: true,
+                    Material: 'Wood',
+                },
+            },
+            {
+                className: 'Part',
+                parent: 'Pavilion',
+                properties: {
+                    Name: 'PavilionFloor',
+                    Size: [pavW - 2, 0.5, pavD - 2],
+                    Position: [cx, groundLevel + 0.25, cz],
+                    Color: [195, 175, 145],
+                    Anchored: true,
+                    Material: 'WoodPlanks',
+                },
+            },
+            ...pillars,
+        ];
+    }
+
+    // Indoor/enclosed scenes → closed concrete building shell
+    const buildW = Math.max(26, Math.min(64, Math.round(dims.width * 0.28)));
+    const buildD = Math.max(20, Math.min(52, Math.round(dims.depth * 0.24)));
+    const wallH = 14;
+    const wallT = 1;
+
+    return [
+        { className: 'Model', parent: 'Workspace', properties: { Name: 'MainBuilding' } },
+        {
+            className: 'Part',
+            parent: 'MainBuilding',
+            properties: {
+                Name: 'MainFloor',
+                Size: [buildW, 1, buildD],
+                Position: [cx, groundLevel + 0.5, cz],
+                Color: [205, 205, 198],
+                Anchored: true,
+                Material: 'Concrete',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'MainBuilding',
+            properties: {
+                Name: 'Roof',
+                Size: [buildW, 1, buildD],
+                Position: [cx, groundLevel + wallH + 0.5, cz],
+                Color: [160, 160, 168],
+                Anchored: true,
+                Material: 'Concrete',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'MainBuilding',
+            properties: {
+                Name: 'WallNorth',
+                Size: [buildW, wallH, wallT],
+                Position: [cx, groundLevel + wallH / 2, cz - buildD / 2],
+                Color: [235, 235, 235],
+                Anchored: true,
+                Material: 'Concrete',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'MainBuilding',
+            properties: {
+                Name: 'WallSouth',
+                Size: [buildW, wallH, wallT],
+                Position: [cx, groundLevel + wallH / 2, cz + buildD / 2],
+                Color: [235, 235, 235],
+                Anchored: true,
+                Material: 'Concrete',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'MainBuilding',
+            properties: {
+                Name: 'WallWest',
+                Size: [wallT, wallH, buildD],
+                Position: [cx - buildW / 2, groundLevel + wallH / 2, cz],
+                Color: [232, 232, 232],
+                Anchored: true,
+                Material: 'Concrete',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'MainBuilding',
+            properties: {
+                Name: 'WallEast',
+                Size: [wallT, wallH, buildD],
+                Position: [cx + buildW / 2, groundLevel + wallH / 2, cz],
+                Color: [232, 232, 232],
+                Anchored: true,
+                Material: 'Concrete',
+            },
+        },
+    ];
 }
 
 function shouldUseDeterministicLayoutPreview(prompt) {
@@ -1640,16 +2195,19 @@ function withTimeout(promise, timeoutMs, code = 'AI_TIMEOUT') {
     ]);
 }
 
-function buildCompletionRequest(messages, options = {}) {
+function buildCompletionRequest(messages, target, options = {}) {
     const request = {
-        model: AI_MODEL,
-        temperature: ACTIVE_PROVIDER.temperature,
+        model: target.model,
+        temperature: target.provider.temperature,
         messages,
     };
 
-    request[ACTIVE_PROVIDER.maxTokenField] = options.maxTokens || 1000;
+    request[target.provider.maxTokenField] = options.maxTokens || 1000;
 
-    if (AI_PROVIDER === 'openai') {
+    // Both OpenAI and Qwen DashScope support response_format for JSON enforcement.
+    // This dramatically reduces JSON parse failures. Vision models may not support it,
+    // so skip for vision-routed requests.
+    if (!target.routed) {
         request.response_format = { type: 'json_object' };
     }
 
@@ -1814,7 +2372,7 @@ function normalizeParsedResponseShape(data) {
     return normalized;
 }
 
-async function repairStructuredResponse({ prompt, rawText, performanceSystemMessage, validationErrors }) {
+async function repairStructuredResponse({ prompt, rawText, performanceSystemMessage, validationErrors, target }) {
     const repairMessages = [
         { role: 'system', content: FAST_SYSTEM_PROMPT },
         {
@@ -1856,8 +2414,8 @@ async function repairStructuredResponse({ prompt, rawText, performanceSystemMess
 
     const repairCompletion = await withTimeout(
         retryWithBackoff(() =>
-            aiClient.chat.completions.create(buildCompletionRequest(repairMessages, {
-                maxTokens: Math.max(900, Math.min(1400, estimateMaxTokens(prompt))),
+            target.client.chat.completions.create(buildCompletionRequest(repairMessages, target, {
+                maxTokens: Math.max(900, Math.min(1800, estimateMaxTokens(prompt, null, requestedMode))),
             }))
         ),
         20_000,
@@ -1905,8 +2463,10 @@ async function retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
 
 // ── POST /generate ───────────────────────────────────────────
 app.post('/generate', apiLimiter, async (req, res) => {
-    const { prompt, conversationId, mode, generateEnv, imageUrls, referenceImages } = req.body;
-    const generationMode = (mode === 'detailed') ? 'detailed' : 'quick';
+    const { prompt, conversationId, mode, generateEnv, imageUrls, referenceImages, gameMode } = req.body;
+    const requestedMode = (mode === 'detailed') ? 'detailed' : 'quick';
+    const requestId = Math.random().toString(36).slice(2, 8);
+    const startedAt = Date.now();
 
     // Input validation — before touching any state
     if (!prompt || typeof prompt !== 'string' || prompt.trim() === '') {
@@ -1938,6 +2498,26 @@ app.post('/generate', apiLimiter, async (req, res) => {
     };
     session.lastAccessed = Date.now();
 
+    const normalizedReferenceResult = normalizeReferenceImages(referenceImages, imageUrls);
+    const normalizedReferenceImages = normalizedReferenceResult.images;
+    const generationTarget = getGenerationTarget(normalizedReferenceImages.length > 0);
+    const sceneQualityKeywords = /\b(scene|layout|map|campus|classroom|arena|lobby|town|island|terrain|environment|surroundings|architecture|building|world)\b/i;
+    const shouldForceDetailed = requestedMode === 'quick' && (
+        sceneQualityKeywords.test(prompt)
+        || normalizedReferenceImages.length > 0
+    );
+    const generationMode = shouldForceDetailed ? 'detailed' : requestedMode;
+    const modeReason = shouldForceDetailed
+        ? (normalizedReferenceImages.length > 0 ? 'reference_images' : 'scene_prompt')
+        : 'requested';
+
+    console.log(
+        `[${requestId}] /generate mode=${requestedMode}->${generationMode} reason=${modeReason} refs=${normalizedReferenceImages.length} generateEnv=${generateEnv !== false}`
+    );
+    console.log(
+        `[${requestId}] model-route=${generationTarget.model}${generationTarget.routed ? ' (vision-routed)' : ''}`
+    );
+
     const userMessage = buildUserMessage(prompt, session);
     const historyLengthBeforeTurn = session.messages.length;
 
@@ -1951,49 +2531,64 @@ app.post('/generate', apiLimiter, async (req, res) => {
 
     try {
         const performanceSystemMessage = buildPerformanceSystemMessage(prompt, session);
+        const phaseExecutionSystemMessage = buildPhaseExecutionSystemMessage(prompt, session);
 
         // ── Image analysis (if reference images were provided) ─
         let imageContext = '';
         const imageWarnings = [];
-        const normalizedReferenceResult = normalizeReferenceImages(referenceImages, imageUrls);
-        const normalizedReferenceImages = normalizedReferenceResult.images;
+        let imageAnalysisState = 'not_requested';
         if (normalizedReferenceResult.warnings.length > 0) {
             imageWarnings.push(...normalizedReferenceResult.warnings);
         }
 
         if (normalizedReferenceImages.length > 0) {
             try {
-                if (!process.env.VISION_MODEL) {
-                    imageWarnings.push(
-                        'Reference images were provided, but VISION_MODEL is not configured in .env. Image analysis was skipped.'
-                    );
-                } else {
-                    const resolvedReferenceResult = await resolveReferenceImages(normalizedReferenceImages);
-                    if (resolvedReferenceResult.warnings.length > 0) {
-                        imageWarnings.push(...resolvedReferenceResult.warnings);
-                    }
+                const resolvedReferenceResult = await resolveReferenceImages(normalizedReferenceImages);
+                if (resolvedReferenceResult.warnings.length > 0) {
+                    imageWarnings.push(...resolvedReferenceResult.warnings);
+                }
 
-                    if (resolvedReferenceResult.images.length > 0) {
-                        const imageAnalysis = await analyzeReferenceImages(resolvedReferenceResult.images, prompt);
-                        if (imageAnalysis) {
-                            imageContext = imageAnalysisToContext(imageAnalysis);
-                            console.log('📷 Image analysis injected into prompt context');
+                if (resolvedReferenceResult.images.length > 0) {
+                    const imageAnalysis = await analyzeReferenceImages(resolvedReferenceResult.images, prompt);
+                    if (imageAnalysis) {
+                        imageContext = imageAnalysisToContext(imageAnalysis);
+                        imageAnalysisState = 'used';
+                        console.log(`[${requestId}] 📷 image analysis used (${resolvedReferenceResult.images.length} refs)`);
+                    } else {
+                        // Vision model unavailable or returned nothing — fall back to
+                        // injecting the image URLs as text hints so the text model at
+                        // least knows references were provided and can read the labels.
+                        const textFallbackLines = resolvedReferenceResult.images
+                            .map((img, idx) => `  Reference ${idx + 1}: ${img.label || img.url || img.value}`)
+                            .filter(Boolean);
+                        if (textFallbackLines.length > 0) {
+                            imageContext = '\nReference images provided (vision analysis unavailable, using labels only):\n'
+                                + textFallbackLines.join('\n');
+                            imageAnalysisState = 'text_fallback';
+                            console.log(`[${requestId}] 📷 vision unavailable, using text-label fallback for ${textFallbackLines.length} refs`);
                         } else {
+                            imageAnalysisState = 'skipped_or_empty';
                             imageWarnings.push('Reference images were resolved, but the vision model did not return usable analysis.');
                         }
-                    } else {
-                        imageWarnings.push('No valid reference images could be resolved for analysis.');
                     }
+                } else {
+                    imageAnalysisState = 'no_resolved_images';
+                    imageWarnings.push('No valid reference images could be resolved for analysis.');
                 }
             } catch (imgErr) {
+                imageAnalysisState = 'failed';
                 imageWarnings.push('Failed to analyze reference images: ' + imgErr.message);
                 console.warn('⚠️  Image analysis failed:', imgErr.message);
             }
+        } else {
+            imageAnalysisState = 'no_reference_images';
         }
+        console.log(`[${requestId}] image-analysis=${imageAnalysisState}`);
 
         // ── Two-pass pipeline (Detailed mode) ───────────────
         let scenePlan = null;
         let scenePlanText = null;
+        let usedDeterministicScenePlan = false;
 
         if (generationMode === 'detailed' && !isContinuePrompt(prompt) && !isContextualFollowUpPrompt(prompt, session)) {
             console.log('🔬 Detailed mode: running scene planner...');
@@ -2006,10 +2601,16 @@ app.post('/generate', apiLimiter, async (req, res) => {
             plannerMessages.push({ role: 'user', content: String(prompt).slice(0, 4000) });
 
             try {
+                // Dynamic planner budget: complex/system-heavy prompts need more tokens
+                // for a fully detailed zone + object + environment plan.
+                const plannerTokenBudget = looksComplexPrompt(prompt) ? 2000
+                    : /\b(tycoon|obby|obstacle|survival|waves?|ctf|capture|king of the hill|lobby|arena|round)\b/i.test(prompt) ? 1800
+                    : 1400;
+                // Use PLANNER_TARGET (qwen-turbo) — fast enough to finish in 8-10s
                 const planCompletion = await withTimeout(
                     retryWithBackoff(() =>
-                        aiClient.chat.completions.create(buildCompletionRequest(plannerMessages, {
-                            maxTokens: 1200,
+                        PLANNER_TARGET.client.chat.completions.create(buildCompletionRequest(plannerMessages, PLANNER_TARGET, {
+                            maxTokens: plannerTokenBudget,
                         }))
                     ),
                     20_000,
@@ -2018,6 +2619,11 @@ app.post('/generate', apiLimiter, async (req, res) => {
                 const planRaw = getCompletionText(planCompletion.choices[0].message || {});
                 try {
                     scenePlan = parseJsonResponse(planRaw);
+                    // Server-side enforcement: ensure environment always generates
+                    // for scene prompts when the user hasn't explicitly toggled it off.
+                    if (generateEnv !== false && scenePlan.environment) {
+                        scenePlan.environment.generateSurroundings = true;
+                    }
                     const planValidation = validateScenePlan(scenePlan);
                     if (planValidation.warnings.length > 0) {
                         console.warn('Scene plan warnings:', planValidation.warnings);
@@ -2025,12 +2631,54 @@ app.post('/generate', apiLimiter, async (req, res) => {
                     scenePlanText = JSON.stringify(scenePlan, null, 2);
                     console.log('✅ Scene plan generated:', scenePlan.title || scenePlan.sceneType);
                 } catch (planParseErr) {
-                    console.warn('⚠️  Scene planner returned unparseable JSON, falling back to single-pass');
-                    scenePlan = null;
+                    console.warn('⚠️  Scene planner returned unparseable JSON, attempting repair pass...');
+                    try {
+                        const plannerRepairMessages = [
+                            ...plannerMessages,
+                            { role: 'assistant', content: String(planRaw || '').slice(0, 10_000) },
+                            {
+                                role: 'user',
+                                content: 'Rewrite your previous answer as strict ScenePlan JSON only. No prose, no markdown, no code fences.',
+                            },
+                        ];
+                        const repairCompletion = await withTimeout(
+                            retryWithBackoff(() =>
+                                PLANNER_TARGET.client.chat.completions.create(buildCompletionRequest(plannerRepairMessages, PLANNER_TARGET, {
+                                    maxTokens: 1200,
+                                }))
+                            ),
+                            15_000,
+                            'PLANNER_REPAIR_TIMEOUT'
+                        );
+                        const repairRaw = getCompletionText(repairCompletion.choices[0].message || {});
+                        scenePlan = parseJsonResponse(repairRaw);
+                        const repairedValidation = validateScenePlan(scenePlan);
+                        if (repairedValidation.warnings.length > 0) {
+                            console.warn('Scene plan warnings (repair):', repairedValidation.warnings);
+                        }
+                        scenePlanText = JSON.stringify(scenePlan, null, 2);
+                        console.log('✅ Scene plan repaired:', scenePlan.title || scenePlan.sceneType);
+                    } catch (planRepairErr) {
+                        console.warn('⚠️  Scene planner repair failed, using deterministic ScenePlan fallback:', planRepairErr.message);
+                        if (isSceneLikePrompt(prompt)) {
+                            scenePlan = buildDeterministicScenePlan(prompt);
+                            scenePlanText = JSON.stringify(scenePlan, null, 2);
+                            console.log('✅ Deterministic ScenePlan fallback injected');
+                        } else {
+                            scenePlan = null;
+                        }
+                    }
                 }
             } catch (planErr) {
-                console.warn('⚠️  Scene planner failed, falling back to single-pass:', planErr.message);
-                scenePlan = null;
+                console.warn('⚠️  Scene planner failed, using deterministic ScenePlan fallback:', planErr.message);
+                if (isSceneLikePrompt(prompt)) {
+                    scenePlan = buildDeterministicScenePlan(prompt);
+                    scenePlanText = JSON.stringify(scenePlan, null, 2);
+                    usedDeterministicScenePlan = true;
+                    console.log('✅ Deterministic ScenePlan fallback injected');
+                } else {
+                    scenePlan = null;
+                }
             }
         }
 
@@ -2047,13 +2695,26 @@ app.post('/generate', apiLimiter, async (req, res) => {
             messages.push({ role: 'system', content: buildScenePlanContext(scenePlan) });
         }
 
-        // Inject image context for single-pass mode
-        if (imageContext && !scenePlan) {
+        // Inject image context into BOTH single-pass and two-pass generation.
+        // In two-pass, the visual analysis reinforces the plan already embedded above,
+        // keeping colors, style, and object types visible to the builder pass.
+        if (imageContext) {
             messages.push({ role: 'system', content: imageContext });
         }
 
         if (performanceSystemMessage) {
             messages.push({ role: 'system', content: performanceSystemMessage });
+        }
+        if (phaseExecutionSystemMessage) {
+            messages.push({ role: 'system', content: phaseExecutionSystemMessage });
+        }
+
+        // Inject game mode hint when the user selected a preset from the plugin UI
+        if (gameMode && typeof gameMode === 'string') {
+            messages.push({
+                role: 'system',
+                content: `The user has selected the "${gameMode}" game mode preset. Prioritize the ${gameMode} GAME MODE TEMPLATE from the system prompt. Ensure all required scripts and instances for that game mode are generated. Use phases if complexity is high.`,
+            });
         }
 
         messages.push(...session.messages);
@@ -2061,22 +2722,45 @@ app.post('/generate', apiLimiter, async (req, res) => {
         let rawText = '';
         let parsed = null;
 
-        if (shouldUseDeterministicLayoutPreview(prompt)) {
+        if (usedDeterministicScenePlan && isSceneLikePrompt(prompt)) {
+            const forcedPhase = Math.max(1, Math.min(3, inferRequestedPhase(prompt, session)));
+            parsed = {
+                explanation: forcedPhase === 1
+                    ? "Created the core map shell for phase 1. Reply 'continue' for phase 2."
+                    : (forcedPhase === 2
+                        ? "Expanded gameplay structures and details for phase 2. Reply 'continue' for phase 3."
+                        : 'Finalized world composition and boundaries for phase 3.'),
+                complexity: 'complex',
+                phases: [
+                    'Phase 1: Build core structure and base layout',
+                    'Phase 2: Add gameplay structures and interior/exterior details',
+                    'Phase 3: Add exterior environment, boundaries, and polish',
+                ],
+                currentPhase: forcedPhase,
+                totalPhases: 3,
+                instances: [],
+                terrain: [],
+                scripts: [],
+            };
+            console.log(`[${requestId}] skipped long builder call and used deterministic phase scaffold (phase ${forcedPhase})`);
+        }
+
+        if (!parsed && shouldUseDeterministicLayoutPreview(prompt)) {
             parsed = buildMapLayoutFallback(prompt);
             console.warn('Used deterministic layout preview shortcut.');
-        } else if (shouldUseDeterministicTerrainPreview(prompt)) {
+        } else if (!parsed && shouldUseDeterministicTerrainPreview(prompt)) {
             parsed = buildTerrainFallback(prompt);
             console.warn('Used deterministic terrain preview shortcut.');
-        } else {
+        } else if (!parsed) {
             let completion;
             try {
                 completion = await withTimeout(
                     retryWithBackoff(() =>
-                        aiClient.chat.completions.create(buildCompletionRequest(messages, {
+                        generationTarget.client.chat.completions.create(buildCompletionRequest(messages, generationTarget, {
                             maxTokens: estimateMaxTokens(prompt, session, generationMode),
                         }))
                     ),
-                    50_000  // Raised from 25s to 50s for two-pass pipeline
+                    75_000  // Raised to 75s — qwen-plus needs ~15-20s for 3500 tokens
                 );
             } catch (err) {
                 if (err.code === 'AI_TIMEOUT') {
@@ -2103,6 +2787,7 @@ app.post('/generate', apiLimiter, async (req, res) => {
                             prompt,
                             rawText,
                             performanceSystemMessage,
+                            target: generationTarget,
                         });
                         console.warn('Recovered invalid JSON response with repair pass.');
                     } catch (_) {
@@ -2138,6 +2823,7 @@ app.post('/generate', apiLimiter, async (req, res) => {
                     rawText,
                     performanceSystemMessage,
                     validationErrors: validation.errors,
+                    target: generationTarget,
                 });
                 parsed = normalizeParsedResponseShape(parsed);
                 validation = validateResponseStructure(parsed);
@@ -2223,6 +2909,31 @@ app.post('/generate', apiLimiter, async (req, res) => {
                 }));
         }
 
+        // ── Apply layout hints (deterministic grid/row/ring positions) ─
+        if (safe.instances && safe.instances.length > 0) {
+            try {
+                safe.instances = applyLayoutHints(safe.instances);
+            } catch (layoutErr) {
+                console.warn('⚠️  Layout hint processing failed:', layoutErr.message);
+            }
+        }
+
+        // ── Minimum thickness enforcer ───────────────────────────────
+        // Flat path/slab objects with Y < 0.5 look like decals and cause
+        // extreme aspect-ratio warnings. Clamp them to at least 0.5 studs.
+        const FLAT_SURFACE_NAMES = /path|walkway|pavement|sidewalk|slab|floor|ground|plaza|road|lane/i;
+        if (Array.isArray(safe.instances)) {
+            for (const inst of safe.instances) {
+                if (inst?.properties?.Size && Array.isArray(inst.properties.Size) && inst.properties.Size.length === 3) {
+                    const [sx, sy, sz] = inst.properties.Size;
+                    const name = String(inst?.properties?.Name || '');
+                    if (sy < 0.5 && FLAT_SURFACE_NAMES.test(name)) {
+                        inst.properties.Size = [sx, 0.5, sz];
+                    }
+                }
+            }
+        }
+
         // ── Merge template-resolved objects (Detailed mode) ─
         if (scenePlan) {
             try {
@@ -2241,13 +2952,63 @@ app.post('/generate', apiLimiter, async (req, res) => {
         if (generateEnv !== false && scenePlan) {
             try {
                 const envResult = generateEnvironment(scenePlan);
+                const requestedPhase = Math.max(1, Math.min(3, inferRequestedPhase(prompt, session)));
+                if (usedDeterministicScenePlan && requestedPhase === 1) {
+                    // Phase-1 with a deterministic fallback plan: allow a richer environment
+                    // so the world doesn't feel empty from the first generation.
+                    // Cap raised from 14→32 instances and 4→8 terrain ops.
+                    envResult.instances = envResult.instances.slice(0, 32);
+                    envResult.terrain   = envResult.terrain.slice(0, 8);
+                }
                 if (envResult.instances.length > 0 || envResult.terrain.length > 0) {
                     safe.instances = [...(safe.instances || []), ...envResult.instances];
                     safe.terrain = [...(safe.terrain || []), ...envResult.terrain];
                     console.log(`🌍 Added ${envResult.instances.length} environment instances, ${envResult.terrain.length} terrain ops`);
                 }
+
+                if (usedDeterministicScenePlan && requestedPhase === 1) {
+                    const boundaryNames = new Set(
+                        (safe.instances || [])
+                            .map(inst => String(inst?.properties?.Name || ''))
+                            .filter(Boolean)
+                    );
+                    const hasBoundary = [...boundaryNames].some(name => /boundary|waterbound/i.test(name));
+                    if (!hasBoundary) {
+                        const boundaryFallback = buildDeterministicBoundaryInstances(scenePlan);
+                        safe.instances = [...(safe.instances || []), ...boundaryFallback];
+                        safe.warnings = [...(safe.warnings || []), 'Inserted deterministic map boundaries for phase-1 world completeness.'];
+                        console.log(`[${requestId}] injected deterministic boundary instances`);
+                    }
+                }
             } catch (envErr) {
                 console.warn('⚠️  Environment generation failed:', envErr.message);
+            }
+        }
+
+        // ── Phase-1 composition guard (generic scene quality) ─
+        // Ensures the first phase of scene/map requests includes a usable core structure.
+        // Outdoor/open scenes (parks, forests, islands) only need a pavilion if truly empty —
+        // they don't require a closed building shell.
+        if (
+            isSceneLikePrompt(prompt)
+            && safe.currentPhase === 1
+            && safe.totalPhases > 1
+        ) {
+            const structuralCount = countStructuralInstances(safe.instances || []);
+            const isOutdoor = isOutdoorSceneType(scenePlan);
+            // For outdoor scenes: inject pavilion only if less than 3 any structures exist.
+            // For indoor scenes: require closed shell (floor + roof + 2+ walls).
+            const needsFallback = isOutdoor
+                ? structuralCount < 3 && !hasExistingLayoutShell(safe.instances || [])
+                : (structuralCount < 4 || !hasClosedShell(safe.instances || [])) && !hasExistingLayoutShell(safe.instances || []);
+            if (needsFallback) {
+                const fallbackStructure = buildCoreStructureFallback(scenePlan);
+                safe.instances = [...(safe.instances || []), ...fallbackStructure];
+                safe.warnings = [
+                    ...(safe.warnings || []),
+                    'Phase 1 had weak architecture; backend injected a core structure shell for coherence.',
+                ];
+                console.log(`[${requestId}] injected core structure fallback for phase-1 coherence`);
             }
         }
 
@@ -2260,6 +3021,11 @@ app.post('/generate', apiLimiter, async (req, res) => {
         // [G3] Cross-reference check
         const crossRefWarnings = checkCrossReferences(safe);
         const allWarnings = [...crossRefWarnings, ...(sceneValidation.warnings || [])];
+        if (shouldForceDetailed) {
+            allWarnings.push(
+                'Quick mode was auto-upgraded to Detailed for this request to preserve scene planning and reference-image quality.'
+            );
+        }
         if (imageWarnings.length > 0) {
             allWarnings.push(...imageWarnings);
         }
@@ -2274,10 +3040,42 @@ app.post('/generate', apiLimiter, async (req, res) => {
             console.error('Validation ERRORS (should block apply):', sceneValidation.errors);
         }
 
-        // ── Attach scene plan to response for plugin preview ─
+        // ── Coherence validation gate (advisory, not blocking) ─
+        // Downgraded from blocking to advisory: sparse output is still
+        // better than nothing, and the user can always regenerate.
+        if (isSceneLikePrompt(prompt)) {
+            const coherenceHints = [];
+            const structureCount = countStructuralInstances(safe.instances || []);
+            const hasShell = hasClosedShell(safe.instances || []);
+            const envScore = countEnvironmentSignals(safe.instances || [], safe.terrain || []);
+            const expectsWorldLayer = !!(scenePlan && generateEnv !== false && scenePlan.environment?.generateSurroundings);
+
+            if (safe.currentPhase === 1 && safe.totalPhases > 1 && (!hasShell || structureCount < 4)) {
+                coherenceHints.push('Phase 1 output is missing a complete core shell (floor/roof/walls). Consider regenerating for better structure.');
+            }
+
+            if (expectsWorldLayer && envScore < 8) {
+                coherenceHints.push('Surrounding environment is sparse. Use "continue" or regenerate with Environment ON for a richer world.');
+            }
+
+            if (coherenceHints.length > 0) {
+                safe.warnings = [...(safe.warnings || []), ...coherenceHints];
+                console.warn(`[${requestId}] coherence hints (advisory):`, coherenceHints);
+            }
+        }
+
+        // ── Attach scene plan, coherence score, and preview data ─
         if (scenePlanText) {
             safe.scenePlan = scenePlanText;
         }
+        if (scenePlan) {
+            try {
+                safe.coherenceScore = scoreSceneCoherence(scenePlan, safe);
+                safe.previewData = generatePreviewData(scenePlan, safe);
+            } catch (_) { /* non-critical */ }
+        }
+        safe.generationMode = generationMode;
+        safe.imageAnalysisState = imageAnalysisState;
 
         // Store assistant reply in history
         session.messages.push({
@@ -2287,13 +3085,16 @@ app.post('/generate', apiLimiter, async (req, res) => {
         session.lastResponse = buildLastResponseState(safe);
         conversations.set(conversationId, session);
 
+        console.log(
+            `[${requestId}] done in ${Date.now() - startedAt}ms instances=${(safe.instances || []).length} scripts=${(safe.scripts || []).length} terrain=${(safe.terrain || []).length} warnings=${(safe.warnings || []).length}`
+        );
         return res.json(safe);
 
     } catch (err) {
         session.messages = session.messages.slice(0, historyLengthBeforeTurn);
 
         // [B2] Structured, actionable error messages
-        console.error(`${AI_PROVIDER} error after retries:`, err);
+        console.error(`[${requestId}] ${AI_PROVIDER} error after retries:`, err);
 
         const providerName = ACTIVE_PROVIDER.displayName;
         const keyName      = ACTIVE_PROVIDER.keyName;

@@ -1,9 +1,16 @@
 // ============================================================
-//  Roblox AI Plugin – Image Analyzer Module
+//  Roblox AI Plugin – Image Analyzer Module  v2.0
 //
 //  Processes reference images via a vision-capable AI model.
 //  Extracts: style, color palette, proportions, layout, furniture.
 //  Falls back gracefully when VISION_MODEL env var is not set.
+//
+//  v2.0 improvements:
+//  - Better style extraction with architectural descriptors
+//  - Proportional guidance for consistent object sizing
+//  - Multi-image support with weighted analysis
+//  - Scene type detection enhanced for Roblox context
+//  - Layout density and spacing recommendations
 //
 //  Uses OpenAI-compatible API with image_url content parts.
 // ============================================================
@@ -13,47 +20,58 @@
 const https = require('https');
 const OpenAI = require('openai');
 
-const IMAGE_ANALYSIS_PROMPT = `Analyze this reference image for a Roblox Studio scene builder plugin.
-Extract the following information and return it as a JSON object:
+const IMAGE_ANALYSIS_PROMPT = `You are analyzing a reference image for a Roblox Studio scene generator.
+Extract EVERY visual detail you can see. Be specific and precise — the builder depends on this analysis to recreate the scene.
+
+Return ONLY a JSON object with these fields (skip any you cannot confidently determine):
 
 {
-  "sceneType": "type of scene shown (e.g. classroom, park, island, arena, interior, exterior)",
-  "style": "visual style (e.g. colorful, modern, rustic, fantasy, minimal, realistic)",
-  "colorPalette": {
-    "primary": [R, G, B],
+  "sceneType": "classroom | park | town | arena | lobby | island | forest | street | cafe | office | house | dungeon | custom",
+
+  "style": "describe in 2-4 words, e.g. 'modern minimalist', 'rustic cozy', 'sci-fi industrial', 'colorful cartoon'",
+
+  "colors": {
+    "primary":   [R, G, B],
     "secondary": [R, G, B],
-    "accent": [R, G, B],
-    "background": [R, G, B]
+    "accent":    [R, G, B],
+    "floor":     [R, G, B],
+    "walls":     [R, G, B],
+    "ceiling":   [R, G, B]
   },
+
   "objects": [
-    { "name": "object name", "estimatedSize": "small/medium/large", "material": "likely material", "count": 1 }
+    "exact object name as seen, e.g. wooden desk, metal locker, stone pillar, hanging lamp"
   ],
-  "layout": {
-    "arrangement": "grid/circular/scattered/rows/symmetrical/organic",
-    "density": "sparse/moderate/dense",
-    "openSpace": "percentage of open floor/ground visible"
-  },
-  "architecture": {
-    "wallStyle": "description if walls visible",
-    "floorMaterial": "floor/ground material",
-    "ceilingVisible": true/false,
-    "windowCount": 0,
-    "doorCount": 0
-  },
-  "lighting": {
-    "direction": "overhead/side/ambient/warm/cool",
-    "intensity": "dim/moderate/bright",
-    "timeOfDay": "if outdoor: morning/noon/golden_hour/dusk/night"
-  },
+
+  "layout": "grid | rows | scattered | circular | symmetrical | organic | L-shape | perimeter",
+
+  "density": "sparse | moderate | dense",
+
   "proportions": {
-    "roomWidth": "estimated in Roblox studs (1 stud ≈ 0.28m)",
-    "roomDepth": "estimated in Roblox studs",
-    "ceilingHeight": "estimated in Roblox studs"
+    "scale": "small | medium | large | very_large",
+    "ceilingHeight": "low | normal | tall | outdoor",
+    "roomWidth": "narrow | medium | wide | very_wide",
+    "objectSpacing": "tight | normal | spacious"
   },
-  "notes": "Any other relevant details about the scene"
+
+  "materials": [
+    "exact Roblox material name from: Wood, SmoothPlastic, Metal, Brick, Concrete, Cobblestone, Glass, Neon, Marble, Granite, Grass, Ground, Sand, Rock, Ice, Fabric, Slate, WoodPlanks"
+  ],
+
+  "lighting": "bright | dim | warm | cool | golden_hour | night | neon",
+
+  "atmosphere": "indoor | outdoor | underground | elevated",
+
+  "floorPattern": "flat | checkered | tiled | wooden_planks | carpet | stone | dirt | grass",
+
+  "wallPattern": "plain | painted | brick | paneled | glass | stone | tiled",
+
+  "landmarks": ["most visually distinctive feature in the scene, e.g. large central fountain, tall clock tower"],
+
+  "notes": "One sentence capturing the most important visual detail not covered above"
 }
 
-Return ONLY the JSON. No prose, no markdown.`;
+Return ONLY the JSON. No prose, no markdown, no code fences. Be as specific as possible — vague answers are not useful.`;
 
 /**
  * Create a vision-capable AI client.
@@ -61,7 +79,9 @@ Return ONLY the JSON. No prose, no markdown.`;
  * Falls back to the primary API key if VISION_API_KEY is not set.
  */
 function createVisionClient() {
-    const visionModel = process.env.VISION_MODEL;
+    const visionModel = process.env.VISION_MODEL
+        || (process.env.QWEN_API_KEY ? 'qwen-vl-plus' : null)
+        || (process.env.OPENAI_API_KEY ? 'gpt-4o-mini' : null);
     if (!visionModel) {
         return null;
     }
@@ -366,7 +386,7 @@ async function analyzeReferenceImages(referenceImages, promptContext) {
 
     const vision = createVisionClient();
     if (!vision) {
-        console.log('ℹ️  No VISION_MODEL configured — skipping image analysis');
+        console.log('ℹ️  No vision model/client available — skipping image analysis');
         return null;
     }
 
@@ -418,8 +438,8 @@ async function analyzeReferenceImages(referenceImages, promptContext) {
             messages: [
                 { role: 'user', content },
             ],
-            max_tokens: 1200,
-            temperature: 0.3,
+            max_tokens: 1800,
+            temperature: 0.1,
         });
 
         const responseText = completion.choices?.[0]?.message?.content || '';
@@ -446,51 +466,179 @@ async function analyzeReferenceImages(referenceImages, promptContext) {
 }
 
 /**
- * Convert image analysis result into text context for the scene planner.
+ * Convert image analysis result into authoritative generation directives.
+ * These are written as MUST/REQUIRED instructions so the model cannot ignore them.
  * @param {object|null} analysis — Result from analyzeReferenceImages
- * @returns {string} — Text to inject into the planner prompt
+ * @returns {string} — System-level directive block to inject into the AI prompt
  */
 function imageAnalysisToContext(analysis) {
     if (!analysis) {
         return '';
     }
 
+    // Raw fallback: the vision model returned prose instead of JSON
     if (analysis.raw) {
-        return `\nReference image analysis:\n${analysis.notes}`;
+        return [
+            '════════════════════════════════════════════════════════',
+            'REFERENCE IMAGE DIRECTIVES (high priority — follow exactly)',
+            '════════════════════════════════════════════════════════',
+            'A reference image was analyzed. Apply these observations to the scene:',
+            analysis.notes || '',
+            'You MUST reflect the visual style, colors, and object types described above.',
+            '════════════════════════════════════════════════════════',
+        ].join('\n');
     }
 
-    const lines = ['\nReference image analysis:'];
+    const lines = [
+        '════════════════════════════════════════════════════════',
+        'REFERENCE IMAGE DIRECTIVES (high priority — follow exactly)',
+        '════════════════════════════════════════════════════════',
+        'The user attached a reference image. You MUST use these findings to drive the scene:',
+        '',
+    ];
 
-    if (analysis.sceneType) {
-        lines.push(`  Scene type: ${analysis.sceneType}`);
+    // Scene type — override if the analysis is confident
+    if (analysis.sceneType && analysis.sceneType !== 'custom') {
+        lines.push(`SCENE TYPE: Build a "${analysis.sceneType}" scene matching the reference.`);
     }
+
+    // Style — drives material choices, color palette, and object type selection
     if (analysis.style) {
-        lines.push(`  Visual style: ${analysis.style}`);
+        lines.push(`VISUAL STYLE: The scene must feel "${analysis.style}". All materials, colors, and props must reflect this.`);
     }
-    if (analysis.colorPalette) {
-        const cp = analysis.colorPalette;
-        lines.push(`  Colors: primary ${JSON.stringify(cp.primary)}, secondary ${JSON.stringify(cp.secondary)}, accent ${JSON.stringify(cp.accent)}`);
+
+    // Colors — these are REQUIRED, not suggestions
+    if (analysis.colors) {
+        const c = analysis.colors;
+        const colorParts = [];
+        if (Array.isArray(c.primary) && c.primary.length === 3)     colorParts.push(`primary [${c.primary.join(',')}]`);
+        if (Array.isArray(c.secondary) && c.secondary.length === 3) colorParts.push(`secondary [${c.secondary.join(',')}]`);
+        if (Array.isArray(c.accent) && c.accent.length === 3)       colorParts.push(`accent [${c.accent.join(',')}]`);
+        if (colorParts.length > 0) {
+            lines.push(`COLOR PALETTE (REQUIRED): Use these exact RGB colors — ${colorParts.join(', ')}. Apply them consistently to all instances. Do NOT substitute with generic colors.`);
+        }
+        const surfaceParts = [];
+        if (Array.isArray(c.floor) && c.floor.length === 3)   surfaceParts.push(`floor [${c.floor.join(',')}]`);
+        if (Array.isArray(c.walls) && c.walls.length === 3)   surfaceParts.push(`walls [${c.walls.join(',')}]`);
+        if (Array.isArray(c.ceiling) && c.ceiling.length === 3) surfaceParts.push(`ceiling [${c.ceiling.join(',')}]`);
+        if (surfaceParts.length > 0) {
+            lines.push(`SURFACE COLORS (REQUIRED): Match these surface colors exactly — ${surfaceParts.join(', ')}.`);
+        }
     }
+
+    // Objects — must be included in the scene
     if (Array.isArray(analysis.objects) && analysis.objects.length > 0) {
-        lines.push(`  Objects spotted: ${analysis.objects.map(o => `${o.name} (${o.estimatedSize})`).join(', ')}`);
+        const names = analysis.objects.map(o => typeof o === 'string' ? o : (o.name || String(o)));
+        lines.push(`REQUIRED OBJECTS: You MUST include the following objects from the reference: ${names.join(', ')}. Use templates when available, otherwise generate full instances.`);
     }
+
+    // Layout — spatial arrangement instruction
     if (analysis.layout) {
-        lines.push(`  Layout: ${analysis.layout.arrangement}, density: ${analysis.layout.density}`);
+        const layoutStr = typeof analysis.layout === 'string'
+            ? analysis.layout
+            : (analysis.layout.arrangement || JSON.stringify(analysis.layout));
+        lines.push(`SPATIAL LAYOUT: Arrange objects using a "${layoutStr}" pattern as seen in the reference. Use layoutHint for repeated objects.`);
     }
-    if (analysis.architecture) {
-        const arch = analysis.architecture;
-        lines.push(`  Architecture: floor=${arch.floorMaterial || '?'}, ${arch.windowCount || 0} windows, ${arch.doorCount || 0} doors`);
+
+    // Density — how full/sparse the scene should be
+    if (analysis.density) {
+        const densityMap = {
+            sparse:   'Leave open space between objects. Do not overcrowd.',
+            moderate: 'Fill the scene at a natural density — not empty, not cluttered.',
+            dense:    'Pack the scene with objects. Every zone should feel fully populated.',
+        };
+        lines.push(`OBJECT DENSITY: ${densityMap[analysis.density] || analysis.density}`);
     }
+
+    // Proportions
     if (analysis.proportions) {
         const p = analysis.proportions;
-        lines.push(`  Proportions: ~${p.roomWidth}×${p.roomDepth} studs, ceiling ${p.ceilingHeight} studs`);
+        if (p.scale) {
+            const scaleMap = {
+                small:      'Objects are compact and close to human scale (~3–5 stud width).',
+                medium:     'Objects are standard Roblox scale (~5–10 stud width).',
+                large:      'Objects are oversized — bold and architectural (~10–20 stud width).',
+                very_large: 'Objects are massive — monumental scale (20+ studs).',
+            };
+            lines.push(`OBJECT SCALE: ${scaleMap[p.scale] || p.scale}`);
+        }
+        if (p.ceilingHeight) {
+            const ceilMap = {
+                low:     'Ceiling height 8–10 studs.',
+                normal:  'Ceiling height 12–16 studs.',
+                tall:    'Ceiling height 20–28 studs.',
+                outdoor: 'No ceiling — outdoor open scene.',
+            };
+            lines.push(`CEILING/HEIGHT: ${ceilMap[p.ceilingHeight] || p.ceilingHeight}`);
+        }
     }
+
+    // Materials — drive the material properties
+    if (Array.isArray(analysis.materials) && analysis.materials.length > 0) {
+        lines.push(`MATERIALS (REQUIRED): Use these Roblox materials from the reference: ${analysis.materials.join(', ')}. Apply them to the appropriate structural and decorative elements.`);
+    }
+
+    // Lighting
     if (analysis.lighting) {
-        lines.push(`  Lighting: ${analysis.lighting.direction}, ${analysis.lighting.intensity}, ${analysis.lighting.timeOfDay || 'n/a'}`);
+        const lightStr = typeof analysis.lighting === 'string'
+            ? analysis.lighting
+            : (analysis.lighting.direction || analysis.lighting.intensity || JSON.stringify(analysis.lighting));
+        const lightMap = {
+            bright:       'Use bright ambient lighting. PointLights/SpotLights with Brightness 2+.',
+            dim:          'Keep lighting dim and moody. Low brightness, shadows visible.',
+            warm:         'Use warm yellow-orange lighting: Color [255, 200, 120], Brightness 1.5.',
+            cool:         'Use cool blue-white lighting: Color [180, 200, 255], Brightness 1.2.',
+            golden_hour:  'Golden hour warmth: Color [255, 180, 80], long shadows, sunset feel.',
+            night:        'Dark ambient, glowing light sources only. Neon or lantern lights.',
+        };
+        lines.push(`LIGHTING: ${lightMap[lightStr] || `Set lighting to "${lightStr}" to match the reference.`}`);
     }
+
+    // Atmosphere — indoor/outdoor/underground
+    if (analysis.atmosphere) {
+        lines.push(`ATMOSPHERE: Scene is "${analysis.atmosphere}". Adjust sky, lighting, and enclosure accordingly.`);
+    }
+
+    // Floor and wall surface patterns
+    if (analysis.floorPattern) {
+        lines.push(`FLOOR PATTERN: Use "${analysis.floorPattern}" floor material/texture to match the reference.`);
+    }
+    if (analysis.wallPattern) {
+        lines.push(`WALL PATTERN: Use "${analysis.wallPattern}" wall material to match the reference.`);
+    }
+
+    // Proportions — room width
+    if (analysis.proportions?.roomWidth) {
+        const widthMap = {
+            narrow:    'Room/area is narrow — width 20–30 studs.',
+            medium:    'Room/area is medium width — 40–60 studs.',
+            wide:      'Room/area is wide — 70–100 studs.',
+            very_wide: 'Scene is very wide or open — 100+ studs.',
+        };
+        lines.push(`ROOM WIDTH: ${widthMap[analysis.proportions.roomWidth] || analysis.proportions.roomWidth}`);
+    }
+    if (analysis.proportions?.objectSpacing) {
+        const spacingMap = {
+            tight:    'Objects are closely packed with minimal space between them.',
+            normal:   'Standard spacing between objects.',
+            spacious: 'Objects are spread apart with plenty of breathing room.',
+        };
+        lines.push(`OBJECT SPACING: ${spacingMap[analysis.proportions.objectSpacing] || analysis.proportions.objectSpacing}`);
+    }
+
+    // Landmarks — most distinctive features
+    if (Array.isArray(analysis.landmarks) && analysis.landmarks.length > 0) {
+        lines.push(`KEY LANDMARKS (MUST INCLUDE): ${analysis.landmarks.join(', ')}. These are the most visually distinctive elements — they must be prominent in the scene.`);
+    }
+
+    // Extra notes from the vision model
     if (analysis.notes) {
-        lines.push(`  Notes: ${analysis.notes}`);
+        lines.push(`ADDITIONAL DETAIL: ${analysis.notes}`);
     }
+
+    lines.push('');
+    lines.push('These directives OVERRIDE default generation behavior. The output must visually resemble the reference image.');
+    lines.push('════════════════════════════════════════════════════════');
 
     return lines.join('\n');
 }

@@ -401,8 +401,25 @@ urlPad.PaddingLeft = UDim.new(0, 10)
 urlPad.PaddingRight = UDim.new(0, 10)
 urlPad.Parent = urlBox
 
-local saveUrlBtn = makeButton("Save Endpoint", 5, C.accentDim, 34, connectionCard)
-makeLabel("Endpoint used by the plugin: POST /generate", 6, 16, C.subtext, false, false, connectionCard, Enum.Font.Gotham, 11)
+local connectionBtnRow = Instance.new("Frame")
+connectionBtnRow.Size = UDim2.new(1, -24, 0, 34)
+connectionBtnRow.BackgroundTransparency = 1
+connectionBtnRow.LayoutOrder = 5
+connectionBtnRow.Parent = connectionCard
+
+local connectionBtnLayout = Instance.new("UIListLayout")
+connectionBtnLayout.FillDirection = Enum.FillDirection.Horizontal
+connectionBtnLayout.Padding = UDim.new(0, 8)
+connectionBtnLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+connectionBtnLayout.SortOrder = Enum.SortOrder.LayoutOrder
+connectionBtnLayout.Parent = connectionBtnRow
+
+local saveUrlBtn = makeInlineButton("Save Endpoint", 1, C.accentDim, connectionBtnRow, UDim2.new(0.5, -4, 1, 0))
+saveUrlBtn.TextSize = 12
+local testConnectionBtn = makeInlineButton("Test Connection", 2, C.surfaceAlt, connectionBtnRow, UDim2.new(0.5, -4, 1, 0))
+testConnectionBtn.TextSize = 12
+
+makeLabel("Endpoint used by the plugin: POST /generate and GET /health", 6, 16, C.subtext, false, false, connectionCard, Enum.Font.Gotham, 11)
 
 local buildCard = makeCard(3)
 makeLabel("Build Request", 1, 18, C.white, true, false, buildCard, Enum.Font.GothamBold, 14)
@@ -435,14 +452,89 @@ selLabel.TextSize = 12
 selLabel.TextXAlignment = Enum.TextXAlignment.Left
 selLabel.Parent = selectionFrame
 
-makeLabel("Prompt", 4, 16, C.muted, true, false, buildCard, Enum.Font.GothamMedium, 12)
-makeLabel("Example: Create a round-based game with a timer, teams, and a spawn system", 5, 16, C.subtext, false, false, buildCard, Enum.Font.Gotham, 11)
+-- ── Game Mode Quick-Fill ────────────────────────────────────
+makeLabel("Game Mode", 4, 16, C.muted, true, false, buildCard, Enum.Font.GothamMedium, 12)
+
+local GAME_MODES = {
+    { label = "None",          prompt = nil },
+    { label = "Round-Based",   prompt = "Create a complete round-based game system with a RoundManager script, intermission timer, round timer, player respawn control, and a LocalScript UI showing the countdown. Use RemoteEvents for round start/end. Include phases." },
+    { label = "Capture Flag",  prompt = "Create a full Capture The Flag game: two teams (Red and Blue), flag objects in Workspace, a FlagManager server script that tracks pickup/drop/return/capture states, team scoring, and a FlagUI LocalScript showing flag status and score." },
+    { label = "King of Hill",  prompt = "Create a King of the Hill game: a hill zone in Workspace, a HillManager server script that tracks players inside the zone, awards score over time to the controlling team, and a HillUI LocalScript showing current owner and progress." },
+    { label = "Survival Waves",prompt = "Create a survival waves system: a WaveManager script that spawns NPC enemies each wave, tracks when all enemies are defeated before starting the next wave, scales difficulty per wave, and a WaveUI LocalScript showing wave number and enemy count." },
+    { label = "Tycoon",        prompt = "Create a Tycoon game: each player owns a plot (assigned on join), plots contain purchasable building pads with prices shown on BillboardGuis, a TycoonManager server script tracks ownership and currency, a MoneyCollector pad auto-collects cash every few seconds, and purchases unlock new build pads." },
+    { label = "Obby",          prompt = "Create an obstacle course (obby): a series of 10 platforms with increasing difficulty (moving parts, rotating parts, kill bricks, jump pads, narrow paths), a CheckpointSystem script that saves the last touched checkpoint per player and respawns them there, and a finish pad that awards a 'Course Complete' badge or prize." },
+    { label = "Team Deathmatch",prompt = "Create a Team Deathmatch game: two teams (Red and Blue) with separate spawn locations, a TeamManager server script that assigns players to balanced teams, a LeaderboardManager tracking kills and deaths via DataStore, a StatUpdater script listening for kills via RemoteEvent, and a TeamUI LocalScript." },
+    { label = "Lobby + Arena", prompt = "Create a Lobby and Arena system: a Workspace.Lobby area where players wait, a Workspace.Arena combat area, a LobbyManager server script that waits for minimum players then teleports all to Arena spawns, runs a round, then teleports back to Lobby. Include a LocalScript countdown UI." },
+}
+
+local gameModeRow = Instance.new("Frame")
+gameModeRow.Size = UDim2.new(1, -24, 0, 28)
+gameModeRow.BackgroundTransparency = 1
+gameModeRow.LayoutOrder = 5
+gameModeRow.Parent = buildCard
+
+local gameModeLayout = Instance.new("UIListLayout")
+gameModeLayout.FillDirection = Enum.FillDirection.Horizontal
+gameModeLayout.Padding = UDim.new(0, 6)
+gameModeLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+gameModeLayout.SortOrder = Enum.SortOrder.LayoutOrder
+gameModeLayout.Parent = gameModeRow
+
+local gameModeIndex = 1
+
+local gameModeBtn = Instance.new("TextButton")
+gameModeBtn.Size = UDim2.new(0, 148, 0, 26)
+gameModeBtn.BackgroundColor3 = C.surfaceAlt
+gameModeBtn.TextColor3 = C.white
+gameModeBtn.Font = Enum.Font.GothamMedium
+gameModeBtn.TextSize = 11
+gameModeBtn.Text = "Mode: None"
+gameModeBtn.LayoutOrder = 1
+gameModeBtn.Parent = gameModeRow
+applyCorner(gameModeBtn, 6)
+applyStroke(gameModeBtn, C.border, 1, 0.4)
+
+local gameModeHintLabel = Instance.new("TextLabel")
+gameModeHintLabel.Size = UDim2.new(1, -162, 1, 0)
+gameModeHintLabel.BackgroundTransparency = 1
+gameModeHintLabel.TextColor3 = C.muted
+gameModeHintLabel.Font = Enum.Font.Gotham
+gameModeHintLabel.TextSize = 10
+gameModeHintLabel.TextXAlignment = Enum.TextXAlignment.Left
+gameModeHintLabel.TextWrapped = true
+gameModeHintLabel.Text = "Select a preset to auto-fill the prompt"
+gameModeHintLabel.LayoutOrder = 2
+gameModeHintLabel.Parent = gameModeRow
+
+local function updateGameModeBtn()
+    local m = GAME_MODES[gameModeIndex]
+    if m.prompt then
+        gameModeBtn.Text = "Mode: " .. m.label
+        gameModeBtn.BackgroundColor3 = C.accent
+        gameModeHintLabel.Text = m.label .. " preset loaded"
+    else
+        gameModeBtn.Text = "Mode: None"
+        gameModeBtn.BackgroundColor3 = C.surfaceAlt
+        gameModeHintLabel.Text = "Select a preset to auto-fill the prompt"
+    end
+end
+
+gameModeBtn.MouseButton1Click:Connect(function()
+    gameModeIndex = (gameModeIndex % #GAME_MODES) + 1
+    updateGameModeBtn()
+    local m = GAME_MODES[gameModeIndex]
+    if m.prompt then
+        promptBox.Text = m.prompt
+    end
+end)
+
+makeLabel("Prompt", 6, 16, C.muted, true, false, buildCard, Enum.Font.GothamMedium, 12)
 
 local promptBox = Instance.new("TextBox")
 promptBox.Size             = UDim2.new(1, -24, 0, 112)
 promptBox.BackgroundColor3 = C.input
 promptBox.TextColor3       = C.white
-promptBox.PlaceholderText  = 'Describe what to build, for example: "Add a leaderboard with kills and deaths"'
+promptBox.PlaceholderText  = 'Describe what to build, or pick a Game Mode above to auto-fill'
 promptBox.TextWrapped      = true
 promptBox.ClearTextOnFocus = false
 promptBox.MultiLine        = true
@@ -450,7 +542,7 @@ promptBox.TextYAlignment   = Enum.TextYAlignment.Top
 promptBox.TextXAlignment   = Enum.TextXAlignment.Left
 promptBox.Font             = Enum.Font.Gotham
 promptBox.TextSize         = 14
-promptBox.LayoutOrder      = 6
+promptBox.LayoutOrder      = 7
 promptBox.Parent           = buildCard
 applyCorner(promptBox, 8)
 applyStroke(promptBox, C.border, 1, 0.4)
@@ -461,32 +553,97 @@ pPad.PaddingTop = UDim.new(0, 10)
 pPad.PaddingBottom = UDim.new(0, 10)
 pPad.Parent = promptBox
 
--- ── Reference image input ──────────────────────────────────────
-local refImageLabel = makeLabel("Reference Images (optional)", 7, 14, C.subtext, false, false, buildCard, Enum.Font.Gotham, 12)
-makeLabel(
-    "Paste a public image URL or attach a Roblox image/decal asset from Studio. Up to 3 references per request.",
-    8, 28, C.muted, false, true, buildCard, Enum.Font.Gotham, 11
-)
+-- ── Reference Images ─────────────────────────────────────────
+-- Header row: label + live counter
+local refSectionHeader = Instance.new("Frame")
+refSectionHeader.Size = UDim2.new(1, -24, 0, 20)
+refSectionHeader.BackgroundTransparency = 1
+refSectionHeader.LayoutOrder = 7
+refSectionHeader.Parent = buildCard
+local _rsh = Instance.new("UIListLayout")
+_rsh.FillDirection = Enum.FillDirection.Horizontal
+_rsh.VerticalAlignment = Enum.VerticalAlignment.Center
+_rsh.SortOrder = Enum.SortOrder.LayoutOrder
+_rsh.Parent = refSectionHeader
 
+local refImageLabel = Instance.new("TextLabel")
+refImageLabel.Size = UDim2.new(0.6, 0, 1, 0)
+refImageLabel.BackgroundTransparency = 1
+refImageLabel.Text = "Reference Images (optional)"
+refImageLabel.TextColor3 = C.white
+refImageLabel.Font = Enum.Font.GothamMedium
+refImageLabel.TextSize = 12
+refImageLabel.TextXAlignment = Enum.TextXAlignment.Left
+refImageLabel.LayoutOrder = 1
+refImageLabel.Parent = refSectionHeader
+
+local refCountLabel = Instance.new("TextLabel")
+refCountLabel.Size = UDim2.new(0.4, 0, 1, 0)
+refCountLabel.BackgroundTransparency = 1
+refCountLabel.Text = "0 / 3 attached"
+refCountLabel.TextColor3 = C.muted
+refCountLabel.Font = Enum.Font.Gotham
+refCountLabel.TextSize = 11
+refCountLabel.TextXAlignment = Enum.TextXAlignment.Right
+refCountLabel.LayoutOrder = 2
+refCountLabel.Parent = refSectionHeader
+
+-- ── Primary input: large text box the user clicks into and Cmd+V ──
+-- This is the ONLY interaction needed. Paste a URL → press Enter.
 local refInputBox = Instance.new("TextBox")
-refInputBox.Size             = UDim2.new(1, -24, 0, 36)
-refInputBox.BackgroundColor3 = C.input
-refInputBox.TextColor3       = C.white
-refInputBox.PlaceholderText  = 'Paste image URLs, data:image base64, or asset IDs; one per line'
+refInputBox.Size             = UDim2.new(1, -24, 0, 52)
+refInputBox.BackgroundColor3 = Color3.fromRGB(24, 28, 40)
+refInputBox.TextColor3       = Color3.fromRGB(200, 210, 255)
+refInputBox.PlaceholderText  = "Paste an image URL here, then press Enter  (https://...)"
+refInputBox.PlaceholderColor3 = Color3.fromRGB(70, 85, 120)
 refInputBox.TextWrapped      = true
 refInputBox.ClearTextOnFocus = false
+refInputBox.MultiLine        = false
 refInputBox.Font             = Enum.Font.Gotham
 refInputBox.TextSize         = 12
 refInputBox.TextXAlignment   = Enum.TextXAlignment.Left
-refInputBox.LayoutOrder      = 9
+refInputBox.TextYAlignment   = Enum.TextYAlignment.Center
+refInputBox.LayoutOrder      = 8
 refInputBox.Parent           = buildCard
-applyCorner(refInputBox, 6)
-applyStroke(refInputBox, C.border, 1, 0.4)
+applyCorner(refInputBox, 8)
+
+local refInputStroke = Instance.new("UIStroke")
+refInputStroke.Color = Color3.fromRGB(70, 90, 160)
+refInputStroke.Thickness = 1.5
+refInputStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+refInputStroke.Parent = refInputBox
+
 local refInputPad = Instance.new("UIPadding")
-refInputPad.PaddingLeft = UDim.new(0, 8)
-refInputPad.PaddingRight = UDim.new(0, 8)
+refInputPad.PaddingLeft = UDim.new(0, 12)
+refInputPad.PaddingRight = UDim.new(0, 12)
+refInputPad.PaddingTop = UDim.new(0, 8)
+refInputPad.PaddingBottom = UDim.new(0, 8)
 refInputPad.Parent = refInputBox
 
+-- Instruction label under the text box
+local refHintLabel = Instance.new("TextLabel")
+refHintLabel.Size = UDim2.new(1, -24, 0, 14)
+refHintLabel.BackgroundTransparency = 1
+refHintLabel.Text = "Click the box above → Cmd+V (Mac) or Ctrl+V (Windows) to paste, then press Enter"
+refHintLabel.TextColor3 = Color3.fromRGB(70, 85, 110)
+refHintLabel.Font = Enum.Font.Gotham
+refHintLabel.TextSize = 10
+refHintLabel.TextXAlignment = Enum.TextXAlignment.Left
+refHintLabel.TextWrapped = true
+refHintLabel.LayoutOrder = 9
+refHintLabel.Parent = buildCard
+
+-- Highlight the text box border when focused
+refInputBox.Focused:Connect(function()
+    refInputStroke.Color = Color3.fromRGB(100, 140, 255)
+    refInputStroke.Thickness = 2
+end)
+refInputBox.FocusLost:Connect(function()
+    refInputStroke.Color = Color3.fromRGB(70, 90, 160)
+    refInputStroke.Thickness = 1.5
+end)
+
+-- Action row: Add URL button + Attach Asset + Clear All
 local refActionRow = Instance.new("Frame")
 refActionRow.Size = UDim2.new(1, -24, 0, 28)
 refActionRow.BackgroundTransparency = 1
@@ -504,8 +661,20 @@ local addRefUrlBtn = makeInlineButton("Add URL", 1, C.accentDim, refActionRow)
 local attachRefAssetBtn = makeInlineButton("Attach Asset", 2, C.surfaceAlt, refActionRow)
 local clearRefBtn = makeInlineButton("Clear All", 3, C.surfaceAlt, refActionRow)
 
-local refCountLabel = makeLabel("Attached references: 0/3", 11, 14, C.subtext, false, false, buildCard, Enum.Font.Gotham, 11)
+-- Dummy for compatibility (paste zone no longer exists but is referenced in click handlers)
+local pasteZone = Instance.new("Frame")
+pasteZone.Size = UDim2.new(0, 0, 0, 0)
+pasteZone.BackgroundTransparency = 1
+pasteZone.Visible = false
+pasteZone.Parent = buildCard
+local pasteZoneStroke = Instance.new("UIStroke")
+pasteZoneStroke.Parent = pasteZone
+local pasteIcon = Instance.new("TextLabel")
+pasteIcon.Parent = pasteZone
+local pasteHint = Instance.new("TextLabel")
+pasteHint.Parent = pasteZone
 
+-- Attached images list
 local refListCard = Instance.new("Frame")
 refListCard.Size = UDim2.new(1, -24, 0, 0)
 refListCard.AutomaticSize = Enum.AutomaticSize.Y
@@ -535,7 +704,7 @@ refListLayout.SortOrder = Enum.SortOrder.LayoutOrder
 refListLayout.Parent = refListBody
 
 local refEmptyLabel = makeLabel(
-    "No reference images added yet.",
+    "No reference images attached yet. Paste an image URL above.",
     1, 18, C.muted, false, true, refListBody, Enum.Font.Gotham, 11
 )
 
@@ -560,22 +729,28 @@ qualityToggle.BackgroundColor3 = C.surfaceAlt
 qualityToggle.TextColor3 = C.white
 qualityToggle.Font = Enum.Font.GothamMedium
 qualityToggle.TextSize = 11
-qualityToggle.Text = "⚡ Quick"
+qualityToggle.Text = "🔬 Detailed"
 qualityToggle.LayoutOrder = 1
 qualityToggle.Parent = optionsRow
 applyCorner(qualityToggle, 6)
 applyStroke(qualityToggle, C.border, 1, 0.4)
 
-local isDetailedMode = false
-qualityToggle.MouseButton1Click:Connect(function()
-    isDetailedMode = not isDetailedMode
+local isDetailedMode = true
+local function updateQualityToggle()
     if isDetailedMode then
-        qualityToggle.Text = "\xF0\x9F\x94\xAC Detailed"
+        qualityToggle.Text = "🔬 Detailed"
         qualityToggle.BackgroundColor3 = C.accent
     else
-        qualityToggle.Text = "\xE2\x9A\xA1 Quick"
+        qualityToggle.Text = "⚡ Quick"
         qualityToggle.BackgroundColor3 = C.surfaceAlt
     end
+end
+
+updateQualityToggle()
+
+qualityToggle.MouseButton1Click:Connect(function()
+    isDetailedMode = not isDetailedMode
+    updateQualityToggle()
 end)
 
 -- Environment toggle
@@ -836,45 +1011,109 @@ end
 
 local function renderReferenceImages()
     clearReferenceRows()
-    refCountLabel.Text = string.format("Attached references: %d/%d", #referenceImages, MAX_REFERENCE_IMAGES)
-    refEmptyLabel.Visible = #referenceImages == 0
+
+    local count = #referenceImages
+    refCountLabel.Text = string.format("%d / %d attached", count, MAX_REFERENCE_IMAGES)
+
+    -- Update input box hint based on capacity
+    if count >= MAX_REFERENCE_IMAGES then
+        refInputBox.PlaceholderText = "3 / 3 images attached — remove one below to add another"
+        refInputStroke.Color = Color3.fromRGB(60, 160, 90)
+    else
+        refInputBox.PlaceholderText = "Paste an image URL here, then press Enter  (https://...)"
+        refInputStroke.Color = Color3.fromRGB(70, 90, 160)
+    end
+
+    refEmptyLabel.Visible = count == 0
+    refListCard.Visible = true
+
+    -- Type badge colors
+    local typeBadgeColors = {
+        url    = Color3.fromRGB(60, 120, 200),
+        inline = Color3.fromRGB(150, 80, 200),
+        asset  = Color3.fromRGB(200, 130, 40),
+    }
+    local typeBadgeLabels = {
+        url    = "URL",
+        inline = "PASTED",
+        asset  = "ASSET",
+    }
 
     for index, item in ipairs(referenceImages) do
         local row = Instance.new("Frame")
-        row.Size = UDim2.new(1, -24, 0, 30)
+        row.Size = UDim2.new(1, 0, 0, 42)
         row.BackgroundColor3 = C.input
         row.BorderSizePixel = 0
         row.LayoutOrder = index + 1
         row.Parent = refListBody
-        applyCorner(row, 6)
-        applyStroke(row, C.border, 1, 0.45)
-
-        local rowLabel = Instance.new("TextLabel")
-        rowLabel.Size = UDim2.new(1, -78, 1, 0)
-        rowLabel.BackgroundTransparency = 1
-        rowLabel.TextColor3 = C.white
-        rowLabel.Font = Enum.Font.Gotham
-        rowLabel.TextSize = 11
-        rowLabel.TextXAlignment = Enum.TextXAlignment.Left
-        rowLabel.Text = string.format(
-            "[%d] %s • %s",
-            index,
-            item.type == "asset" and "Asset" or (item.type == "inline" and "Inline" or "URL"),
-            truncateMiddle(item.label or item.value, 54)
-        )
-        rowLabel.Parent = row
+        applyCorner(row, 8)
+        applyStroke(row, C.border, 1, 0.4)
 
         local rowPad = Instance.new("UIPadding")
-        rowPad.PaddingLeft = UDim.new(0, 8)
-        rowPad.PaddingRight = UDim.new(0, 8)
-        rowPad.Parent = rowLabel
+        rowPad.PaddingLeft = UDim.new(0, 10)
+        rowPad.PaddingRight = UDim.new(0, 10)
+        rowPad.PaddingTop = UDim.new(0, 6)
+        rowPad.PaddingBottom = UDim.new(0, 6)
+        rowPad.Parent = row
 
-        local removeBtn = makeButton("Remove", 1, C.dangerDim, 22, row)
-        removeBtn.Size = UDim2.new(0, 64, 0, 22)
-        removeBtn.Position = UDim2.new(1, -68, 0.5, -11)
-        removeBtn.TextSize = 11
+        -- Type badge pill
+        local badge = Instance.new("Frame")
+        badge.Size = UDim2.new(0, 52, 0, 16)
+        badge.Position = UDim2.new(0, 0, 0, 0)
+        badge.BackgroundColor3 = typeBadgeColors[item.type] or C.accentDim
+        badge.BorderSizePixel = 0
+        badge.Parent = row
+        applyCorner(badge, 4)
+
+        local badgeLbl = Instance.new("TextLabel")
+        badgeLbl.Size = UDim2.new(1, 0, 1, 0)
+        badgeLbl.BackgroundTransparency = 1
+        badgeLbl.Text = typeBadgeLabels[item.type] or item.type:upper()
+        badgeLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+        badgeLbl.Font = Enum.Font.GothamBold
+        badgeLbl.TextSize = 9
+        badgeLbl.Parent = badge
+
+        -- Image value label
+        local rowLabel = Instance.new("TextLabel")
+        rowLabel.Size = UDim2.new(1, -64, 0, 14)
+        rowLabel.Position = UDim2.new(0, 0, 0, 18)
+        rowLabel.BackgroundTransparency = 1
+        rowLabel.TextColor3 = C.subtext
+        rowLabel.Font = Enum.Font.Gotham
+        rowLabel.TextSize = 10
+        rowLabel.TextXAlignment = Enum.TextXAlignment.Left
+        rowLabel.TextTruncate = Enum.TextTruncate.AtEnd
+        rowLabel.Text = item.label or truncateMiddle(item.value, 60)
+        rowLabel.Parent = row
+
+        -- Index number
+        local indexLbl = Instance.new("TextLabel")
+        indexLbl.Size = UDim2.new(0, 14, 0, 14)
+        indexLbl.Position = UDim2.new(1, -60, 0, 0)
+        indexLbl.BackgroundTransparency = 1
+        indexLbl.Text = tostring(index)
+        indexLbl.TextColor3 = C.muted
+        indexLbl.Font = Enum.Font.GothamBold
+        indexLbl.TextSize = 10
+        indexLbl.Parent = row
+
+        -- Remove button
+        local removeBtn = Instance.new("TextButton")
+        removeBtn.Size = UDim2.new(0, 44, 0, 20)
+        removeBtn.Position = UDim2.new(1, -44, 0.5, -10)
+        removeBtn.BackgroundColor3 = Color3.fromRGB(160, 50, 50)
+        removeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        removeBtn.Font = Enum.Font.GothamMedium
+        removeBtn.TextSize = 10
+        removeBtn.Text = "Remove"
+        removeBtn.BorderSizePixel = 0
+        removeBtn.Parent = row
+        applyCorner(removeBtn, 4)
+
+        local capturedIndex = index
         removeBtn.MouseButton1Click:Connect(function()
-            table.remove(referenceImages, index)
+            table.remove(referenceImages, capturedIndex)
             renderReferenceImages()
             setStatus("Reference image removed.", C.subtext)
         end)
@@ -1186,6 +1425,38 @@ local function buildPreviewSummary(data, targetParent)
 
     if data.currentPhase and data.totalPhases and data.totalPhases > 1 then
         lines[#lines + 1] = string.format("Phase preview: %d of %d", data.currentPhase, data.totalPhases)
+    end
+
+    if data.generationMode then
+        lines[#lines + 1] = string.format("Mode: %s", data.generationMode)
+    end
+
+    -- Image analysis status — critical for client demos using reference images
+    if data.imageAnalysisState then
+        local stateMap = {
+            used              = "Vision: analyzed reference image(s)",
+            text_fallback     = "Vision: used image label fallback (no vision model active)",
+            skipped_or_empty  = "Vision: image provided but analysis returned empty",
+            no_resolved_images= "Vision: could not resolve image URL",
+            failed            = "Vision: analysis failed (check server logs)",
+            not_requested     = nil,
+            no_reference_images = nil,
+        }
+        local stateMsg = stateMap[data.imageAnalysisState]
+        if stateMsg then
+            lines[#lines + 1] = stateMsg
+        end
+    end
+
+    if type(data.coherenceScore) == "table" then
+        local cs = data.coherenceScore
+        lines[#lines + 1] = string.format(
+            "Quality: %s (%d/%d — %d%%)",
+            tostring(cs.grade or "?"),
+            cs.score or 0,
+            cs.maxScore or 10,
+            cs.percentage or 0
+        )
     end
 
     return table.concat(lines, "\n")
@@ -1549,9 +1820,44 @@ local function updateDemoViewers(data, targetParent, applied)
     setViewerContent(scriptViewer, scriptViewerEmpty, buildScriptViewerText(data))
     setViewerContent(outputViewer, outputViewerEmpty, build3DOutputText(data, targetParent, applied))
     setViewerContent(architectureViewer, architectureViewerEmpty, buildArchitectureViewerText(data, targetParent, applied))
-    -- Update plan viewer if scene plan is present
-    if type(data.scenePlan) == "string" and data.scenePlan ~= "" then
-        setViewerContent(planViewer, planViewerEmpty, data.scenePlan)
+    -- Update plan viewer with structured preview data or raw scene plan
+    local planText = nil
+    if type(data.previewData) == "table" then
+        local pd = data.previewData
+        local planLines = {}
+        if pd.summary then
+            local s = pd.summary
+            planLines[#planLines + 1] = string.format("Scene: %s (%s)", s.title or "Untitled", s.sceneType or "?")
+            if s.dimensions then
+                planLines[#planLines + 1] = string.format("Dimensions: %dx%dx%d studs", s.dimensions.width or 0, s.dimensions.depth or 0, s.dimensions.height or 0)
+            end
+            planLines[#planLines + 1] = string.format("Total output: %d items, %d zones, %d planned objects", s.totalInstances or 0, s.zoneCount or 0, s.objectCount or 0)
+        end
+        if type(pd.zones) == "table" and #pd.zones > 0 then
+            planLines[#planLines + 1] = "\nZones:"
+            for _, z in ipairs(pd.zones) do
+                planLines[#planLines + 1] = string.format("  • %s (%s)", z.name or "?", z.terrain or "?")
+            end
+        end
+        if pd.environment then
+            local env = pd.environment
+            planLines[#planLines + 1] = string.format("\nEnvironment: %s, boundary: %s", env.enabled and "ON" or "OFF", env.boundaryType or "?")
+            if type(env.elements) == "table" and #env.elements > 0 then
+                planLines[#planLines + 1] = "  Elements: " .. table.concat(env.elements, ", ")
+            end
+        end
+        if type(pd.validationHints) == "table" and #pd.validationHints > 0 then
+            planLines[#planLines + 1] = "\nHints:"
+            for _, h in ipairs(pd.validationHints) do
+                planLines[#planLines + 1] = "  • " .. h
+            end
+        end
+        planText = table.concat(planLines, "\n")
+    elseif type(data.scenePlan) == "string" and data.scenePlan ~= "" then
+        planText = data.scenePlan
+    end
+    if planText then
+        setViewerContent(planViewer, planViewerEmpty, planText)
     end
     setViewerTab(getPreferredViewerTab(data))
 end
@@ -1627,6 +1933,27 @@ end)
 setViewerTab("script")
 local isGenerating = false
 renderReferenceImages()
+
+-- Auto-add when text is pasted and looks like a URL (text Changed fires immediately on paste)
+local refInputLastText = ""
+refInputBox:GetPropertyChangedSignal("Text"):Connect(function()
+    local current = refInputBox.Text or ""
+    -- Only auto-add when new text appears that looks like a URL (not just typing a char at a time)
+    if #current > 8 and current ~= refInputLastText then
+        local trimmed = current:match("^%s*(.-)%s*$")
+        if isHttpUrl(trimmed) and #trimmed > 10 then
+            refInputLastText = ""
+            refInputBox.Text = ""
+            local inferredType = "url"
+            local success, err = addReferenceImage({ type = inferredType, value = trimmed }, true)
+            if not success and err then
+                setStatus(err, C.orange)
+                refInputBox.Text = trimmed
+            end
+        end
+    end
+    refInputLastText = current
+end)
 
 addRefUrlBtn.MouseButton1Click:Connect(function()
     flushReferenceInput(true)
@@ -2117,12 +2444,14 @@ local function doGenerate(promptText)
     local requestBaseUrl = normalizeBackendURL(BACKEND_URL) or BACKEND_URL
     local referenceImagePayload = buildReferenceImagePayload()
 
+    local selectedMode = GAME_MODES[gameModeIndex]
     local requestPayload = HttpService:JSONEncode({
         prompt         = fullPrompt,
         conversationId = conversationId,
         mode           = isDetailedMode and "detailed" or "quick",
         generateEnv    = generateEnvironment,
         referenceImages = referenceImagePayload,
+        gameMode       = (selectedMode and selectedMode.label ~= "None") and selectedMode.label or nil,
     })
 
     local ok, response = pcall(function()
@@ -2299,6 +2628,52 @@ saveUrlBtn.MouseButton1Click:Connect(function()
     else
         setStatus("URL cannot be empty.", C.red)
     end
+end)
+
+-- ── Test connection button ────────────────────────────────────
+testConnectionBtn.MouseButton1Click:Connect(function()
+    local testUrl = normalizeBackendURL(urlBox.Text or "")
+    if not testUrl then
+        setStatus("Set a valid backend URL before testing.", C.red)
+        return
+    end
+
+    setStatus("Testing backend connection...", C.subtext)
+    local ok, response = pcall(function()
+        return HttpService:RequestAsync({
+            Url = testUrl .. "/health",
+            Method = "GET",
+        })
+    end)
+
+    if not ok then
+        setStatus("Connection test failed: " .. tostring(response):sub(1, 70), C.red)
+        return
+    end
+
+    if not response.Success then
+        setStatus(
+            string.format("Health check failed (%s %s).", tostring(response.StatusCode), tostring(response.StatusMessage)),
+            C.red
+        )
+        return
+    end
+
+    local okJson, payload = pcall(function()
+        return HttpService:JSONDecode(response.Body or "{}")
+    end)
+    if not okJson or type(payload) ~= "table" then
+        setStatus("Health endpoint responded, but body was not valid JSON.", C.orange)
+        return
+    end
+
+    local provider = tostring(payload.provider or "unknown")
+    local model = tostring(payload.model or "unknown")
+    local status = tostring(payload.status or "ok")
+    setStatus(
+        string.format("Connected: %s (%s) via %s", provider, model, status),
+        C.green
+    )
 end)
 
 -- ── Undo button ───────────────────────────────────────────────
