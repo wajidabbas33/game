@@ -65,41 +65,56 @@ Object spacing:
 
 // ── Scene Planner System Prompt ──────────────────────────────
 
-const SCENE_PLANNER_PROMPT = `You are a Roblox scene architect AI. Your job is to read a user's prompt, understand their intent, and return a structured scene plan in JSON.
+const SCENE_PLANNER_PROMPT = `You are a Roblox architectural planner AI. You produce structured building plans that get translated into Roblox Parts and Models.
 
-## PLANNING PIPELINE (follow these 5 steps in order)
+## PLANNING PIPELINE (follow STRICTLY in order)
 
-### Step 1: Parse the Intent
-- What type of scene? (classroom, park, town, island, arena, etc.)
-- Interior, exterior, or mixed?
-- What specific objects or features did the user mention?
-- What mood or style? (cozy, modern, fantasy, competitive, etc.)
-- If reference images were analyzed, use their style/colors/objects as guidance.
+### Step 1: Classify Intent
+- Interior (office, corridor, classroom, lobby, house, shop) → enclosed shell with rooms.
+- Exterior (park, island, town, arena, forest) → ground plane with terrain and open structures.
+- Mixed (campus, mall with outdoor courtyard) → shell + outdoor zones.
+- Extract every object the user mentioned; do NOT substitute or omit them.
 
-### Step 2: Plan the Room / Area Layout
-- Decide overall map dimensions based on scene complexity.
-- Design the main structural footprint FIRST — this is the core build, centered at [0, 0, 0].
-- For interiors: define floor, walls, ceiling, doors, windows.
-- For exteriors: define ground plane, paths, terrain features.
-- Keep proportions realistic using the scale reference below.
+### Step 2: Define the Structural Shell
+INTERIOR builds MUST include in coreStructure:
+  - "shellParts": explicit list of structural elements:
+    { "role": "floor", "size": [W, 1, D], "position": [0, 0.5, 0], "material": "...", "color": [...] }
+    { "role": "ceiling", "size": [W, 1, D], "position": [0, H+0.5, 0], "material": "...", "color": [...] }
+    { "role": "wallNorth", "size": [W, H, 1], "position": [0, H/2, -D/2], ... }
+    { "role": "wallSouth", ... }  { "role": "wallEast", ... }  { "role": "wallWest", ... }
+  - ceilingHeight for interiors: 14-16 studs.
+  - Walls MUST span from floor to ceiling with no vertical gaps.
 
-### Step 3: Plan Object Placement
-- List every object that should appear in the scene.
-- Use templates when they match (saves tokens and gives correct proportions).
-- For custom objects, describe what they are and where they go.
-- Assign each object to a zone so placement stays organized.
-- Define spacing: grid, scattered, rows, along_path, or line.
+EXTERIOR builds: coreStructure.type = "open_area", no shellParts needed.
 
-### Step 4: Plan Environment
-- Add surroundings: trees, rocks, roads, background buildings, boundary.
-- The area around the main build should never be empty.
-- Choose a boundary type that fits the scene.
-- Keep environment objects outside the core play area.
+### Step 3: Subdivide into Zones (INTERIOR-CRITICAL)
+For interiors, zones MUST describe the room layout:
+  - Each zone has: name, purpose, exact bounds {minX, maxX, minZ, maxZ}, floorMaterial.
+  - Corridor zones: width ≥ 8 studs, connect rooms.
+  - Room zones: lounges, workstations, kitchens, storage — based on prompt.
+  - Interior partitions: list walls/glass separating zones in the "partitions" array:
+    { "from": "corridor", "to": "lounge", "type": "glass_partition", "position": [...], "size": [...] }
+    { "from": "corridor", "to": "kitchen", "type": "solid_wall", "gapWidth": 4, "gapHeight": 7 }
+  - Doorways: leave 4-wide × 7-tall gap in partition walls.
 
-### Step 5: Apply Visual Style
-- Pick a color palette that matches the mood.
-- Set lighting (time of day, ambience).
-- If reference images provided colors/style, use them here.
+### Step 4: Plan Objects per Zone
+- Assign each object to a specific zone by name.
+- Use templates when available. For others use "type": "custom" with exact position and size.
+- Furniture Y must = groundLevel + object half-height (sitting on the floor).
+- Use layoutHint for 3+ identical objects in a zone.
+
+### Step 5: Plan Lighting per Zone
+- pointLights array: one entry per fixture with zone, position, color, brightness.
+- Interior: at minimum 1 ceiling light per 200 sq studs of floor area.
+- Corridor: row of pendant lights along center axis.
+
+### Step 6: Environment
+- INTERIOR-ONLY prompts: set generateSurroundings = false, no trees/roads/grass.
+- OUTDOOR/MIXED: set generateSurroundings = true with appropriate elements.
+
+### Step 7: Color Palette and Style
+- Extract from reference image if provided (style only, prompt defines layout).
+- Apply consistently to shell, partitions, furniture, and lighting.
 
 ════════════════════════════════════════════════════════════
 OUTPUT FORMAT — ScenePlan JSON
@@ -107,81 +122,117 @@ OUTPUT FORMAT — ScenePlan JSON
 Return ONLY a single valid JSON object:
 
 {
-  "sceneType": "floating_island | classroom | arena | lobby | outdoor_park | town | custom",
+  "sceneType": "office_interior | classroom | corridor | lobby | outdoor_park | arena | town | island | custom",
   "title": "Short descriptive title",
   "dimensions": { "width": 128, "depth": 128, "height": 40 },
   "groundLevel": 0,
 
   "coreStructure": {
     "type": "building | open_area | mixed",
-    "width": 32,
-    "depth": 32,
+    "width": 64,
+    "depth": 40,
     "height": 16,
+    "ceilingHeight": 16,
     "position": [0, 0, 0],
-    "description": "Main structure description"
+    "description": "Detailed description of what this structure is",
+    "shellParts": [
+      { "role": "floor", "size": [64, 1, 40], "position": [0, 0.5, 0], "material": "SmoothPlastic", "color": [210, 200, 185] },
+      { "role": "ceiling", "size": [64, 1, 40], "position": [0, 16.5, 0], "material": "SmoothPlastic", "color": [240, 240, 235] },
+      { "role": "wallNorth", "size": [64, 16, 1], "position": [0, 8, -20], "material": "SmoothPlastic", "color": [75, 85, 100] },
+      { "role": "wallSouth", "size": [64, 16, 1], "position": [0, 8, 20], "material": "SmoothPlastic", "color": [75, 85, 100] },
+      { "role": "wallEast", "size": [1, 16, 40], "position": [32, 8, 0], "material": "SmoothPlastic", "color": [75, 85, 100] },
+      { "role": "wallWest", "size": [1, 16, 40], "position": [-32, 8, 0], "material": "SmoothPlastic", "color": [75, 85, 100] }
+    ]
   },
 
   "zones": [
     {
-      "name": "central_meadow",
-      "purpose": "Main grassy area with scattered trees and flowers",
-      "bounds": { "minX": -40, "maxX": 40, "minZ": -40, "maxZ": 40 },
+      "name": "main_corridor",
+      "purpose": "Central corridor connecting all zones",
+      "bounds": { "minX": -5, "maxX": 5, "minZ": -20, "maxZ": 20 },
       "elevation": 0,
-      "terrainMaterial": "Grass"
+      "floorMaterial": "SmoothPlastic",
+      "floorColor": [200, 195, 180]
+    },
+    {
+      "name": "lounge_area",
+      "purpose": "Seating area with teal sofa and shelving",
+      "bounds": { "minX": -32, "maxX": -5, "minZ": -20, "maxZ": 0 },
+      "elevation": 0,
+      "floorMaterial": "Fabric",
+      "floorColor": [180, 175, 165]
+    }
+  ],
+
+  "partitions": [
+    {
+      "from": "main_corridor",
+      "to": "lounge_area",
+      "type": "glass_partition",
+      "position": [-5, 8, -10],
+      "size": [0.5, 16, 20],
+      "material": "Glass",
+      "transparency": 0.6,
+      "color": [40, 40, 45]
     }
   ],
 
   "objects": [
     {
-      "template": "deciduous_tree_medium",
-      "count": 3,
-      "zone": "central_meadow",
-      "spacing": "scattered",
-      "notes": "Place near edges of meadow"
+      "template": "bookshelf",
+      "count": 2,
+      "zone": "lounge_area",
+      "spacing": "row",
+      "notes": "Against west wall"
     },
     {
       "type": "custom",
-      "name": "Fountain",
-      "className": "Model",
-      "description": "A circular stone fountain with water in the center",
-      "position": [0, 0, 0],
-      "size": [8, 4, 8],
-      "material": "Slate",
-      "color": [140, 135, 125]
+      "name": "TealSofa",
+      "className": "Part",
+      "description": "Low teal-colored sofa, 3-seater",
+      "zone": "lounge_area",
+      "position": [-20, 1.5, -10],
+      "size": [10, 3, 4],
+      "material": "Fabric",
+      "color": [80, 160, 140]
     }
   ],
 
+  "pointLights": [
+    { "zone": "main_corridor", "position": [0, 15.5, -10], "color": [255, 220, 180], "brightness": 1.5 },
+    { "zone": "main_corridor", "position": [0, 15.5, 0], "color": [255, 220, 180], "brightness": 1.5 },
+    { "zone": "main_corridor", "position": [0, 15.5, 10], "color": [255, 220, 180], "brightness": 1.5 }
+  ],
+
   "lighting": {
-    "timeOfDay": "golden_hour",
-    "ambience": "warm",
-    "fogDensity": "none | light | medium",
-    "pointLightCount": 4,
-    "pointLightColor": [255, 220, 140]
+    "timeOfDay": "default",
+    "ambience": "cool",
+    "fogDensity": "none"
   },
 
   "environment": {
-    "generateSurroundings": true,
-    "boundaryType": "invisible_walls | floating_edge | terrain_fade | water_border",
-    "surroundingTerrain": "Grass",
-    "surroundingElements": ["trees_sparse", "rocks_scattered", "flowers_random", "roads", "background_structures"],
+    "generateSurroundings": false,
+    "boundaryType": "invisible_walls",
+    "surroundingTerrain": "Air",
+    "surroundingElements": [],
     "mapBoundarySize": { "width": 200, "depth": 200 }
   },
 
   "colorPalette": {
-    "primary": [67, 140, 49],
-    "secondary": [148, 148, 140],
-    "accent": [255, 220, 140],
-    "background": [60, 100, 40],
-    "style": "colorful_whimsical | realistic_natural | modern_clean | rustic_warm | sci_fi | fantasy"
+    "primary": [75, 85, 100],
+    "secondary": [200, 195, 180],
+    "accent": [80, 160, 140],
+    "background": [45, 45, 50],
+    "style": "modern_clean"
   },
 
   "validation": {
     "checklist": [
-      "Core structure centered and proportional",
-      "All zones have valid bounds",
-      "Object counts reasonable for map size",
-      "Environment elements placed outside core",
-      "Boundary defined"
+      "Floor and ceiling span full footprint with matching XZ dimensions",
+      "All 4 perimeter walls span floor to ceiling",
+      "Interior partitions connect zones logically",
+      "Every zone has at least one furniture object",
+      "Lighting covers all zones"
     ],
     "warnings": []
   }
@@ -246,21 +297,128 @@ PLANNING RULES
 13. Return ONLY the JSON. No prose, no markdown, no explanation outside the JSON.`;
 
 // ── Scene Builder System Prompt Addon ────────────────────────
+function resolveShellParts(scenePlan) {
+    const core = scenePlan?.coreStructure;
+    if (!core || !Array.isArray(core.shellParts) || core.shellParts.length === 0) {
+        return [];
+    }
+    const modelName = core.type === 'building' ? 'MainBuilding' : 'CoreStructure';
+    const instances = [
+        { className: 'Model', parent: 'Workspace', properties: { Name: modelName } },
+    ];
+    for (const sp of core.shellParts) {
+        if (!sp.role || !Array.isArray(sp.size) || !Array.isArray(sp.position)) continue;
+        const roleName = String(sp.role).replace(/[^a-zA-Z0-9_]/g, '');
+        const name = roleName.charAt(0).toUpperCase() + roleName.slice(1);
+        const inst = {
+            className: 'Part',
+            parent: modelName,
+            properties: {
+                Name: name,
+                Size: sp.size.map(n => Math.max(0.5, Number(n) || 1)),
+                Position: sp.position.map(n => Number(n) || 0),
+                Anchored: true,
+                Material: sp.material || 'SmoothPlastic',
+            },
+        };
+        if (Array.isArray(sp.color) && sp.color.length === 3) {
+            inst.properties.Color = sp.color;
+        }
+        if (typeof sp.transparency === 'number') {
+            inst.properties.Transparency = sp.transparency;
+        }
+        instances.push(inst);
+    }
+    return instances;
+}
+
+function resolvePartitions(scenePlan) {
+    const partitions = scenePlan?.partitions;
+    if (!Array.isArray(partitions) || partitions.length === 0) return [];
+    const instances = [];
+    for (let i = 0; i < partitions.length; i++) {
+        const p = partitions[i];
+        if (!Array.isArray(p.size) || !Array.isArray(p.position)) continue;
+        const baseName = `Partition_${p.from || 'a'}_${p.to || 'b'}_${i}`;
+        const isGlass = /glass/i.test(p.type || '');
+        const inst = {
+            className: 'Part',
+            parent: 'MainBuilding',
+            properties: {
+                Name: baseName,
+                Size: p.size.map(n => Math.max(0.2, Number(n) || 1)),
+                Position: p.position.map(n => Number(n) || 0),
+                Anchored: true,
+                Material: isGlass ? 'Glass' : (p.material || 'SmoothPlastic'),
+                Transparency: isGlass ? (p.transparency ?? 0.6) : 0,
+            },
+        };
+        if (Array.isArray(p.color) && p.color.length === 3) {
+            inst.properties.Color = p.color;
+        }
+        instances.push(inst);
+    }
+    return instances;
+}
+
+function resolvePlanPointLights(scenePlan) {
+    const lights = scenePlan?.pointLights;
+    if (!Array.isArray(lights) || lights.length === 0) return [];
+    const instances = [];
+    for (let i = 0; i < lights.length; i++) {
+        const l = lights[i];
+        if (!Array.isArray(l.position)) continue;
+        const fixtureName = `CeilingLight_${i}`;
+        instances.push({
+            className: 'Part',
+            parent: 'MainBuilding',
+            properties: {
+                Name: fixtureName,
+                Size: [2, 0.5, 2],
+                Position: l.position.map(n => Number(n) || 0),
+                Anchored: true,
+                Material: 'SmoothPlastic',
+                Color: [50, 50, 55],
+            },
+        });
+        instances.push({
+            className: 'PointLight',
+            parent: fixtureName,
+            properties: {
+                Brightness: l.brightness ?? 1.5,
+                Range: 30,
+                Color: Array.isArray(l.color) ? l.color : [255, 220, 180],
+            },
+        });
+    }
+    return instances;
+}
+
 function buildScenePlanContext(scenePlan) {
     const zones = (scenePlan.zones || []).map(z =>
-        `  • ${z.name}: ${z.purpose} (X: ${z.bounds?.minX ?? '?'} to ${z.bounds?.maxX ?? '?'}, Z: ${z.bounds?.minZ ?? '?'} to ${z.bounds?.maxZ ?? '?'}, elevation: ${z.elevation ?? 0}, terrain: ${z.terrainMaterial || 'Grass'})`
+        `  • ${z.name}: ${z.purpose} (X: ${z.bounds?.minX ?? '?'} to ${z.bounds?.maxX ?? '?'}, Z: ${z.bounds?.minZ ?? '?'} to ${z.bounds?.maxZ ?? '?'}, elevation: ${z.elevation ?? 0}, floor: ${z.floorMaterial || z.terrainMaterial || 'default'})`
     ).join('\n');
 
     const objects = (scenePlan.objects || []).map(o => {
         if (o.template) {
             return `  • TEMPLATE "${o.template}" × ${o.count || 1} in zone "${o.zone || 'main'}" (${o.spacing || 'placed'}) — ${o.notes || ''}`;
         }
-        return `  • CUSTOM "${o.name || o.type}": ${o.description || ''} at [${o.position?.join(',') || '?'}] size [${o.size?.join(',') || '?'}]`;
+        return `  • CUSTOM "${o.name || o.type}": ${o.description || ''} at [${o.position?.join(',') || '?'}] size [${o.size?.join(',') || '?'}] zone="${o.zone || '?'}"`;
     }).join('\n');
+
+    const partitionsText = (scenePlan.partitions || []).map(p =>
+        `  • ${p.type || 'wall'} between "${p.from}" and "${p.to}" at [${p.position?.join(',') || '?'}] size [${p.size?.join(',') || '?'}]`
+    ).join('\n');
+
+    const lightsText = (scenePlan.pointLights || []).map(l =>
+        `  • Light in "${l.zone || '?'}" at [${l.position?.join(',') || '?'}] color [${(l.color || []).join(',')}]`
+    ).join('\n');
 
     const palette = scenePlan.colorPalette || {};
     const env = scenePlan.environment || {};
     const lighting = scenePlan.lighting || {};
+    const core = scenePlan.coreStructure || {};
+    const hasShellParts = Array.isArray(core.shellParts) && core.shellParts.length > 0;
 
     return `════════════════════════════════════════════════════════════
 SCENE PLAN CONTEXT (follow this plan precisely)
@@ -269,17 +427,23 @@ Scene: ${scenePlan.title || scenePlan.sceneType || 'Custom'}
 Type: ${scenePlan.sceneType}
 Dimensions: ${scenePlan.dimensions?.width || 128}W × ${scenePlan.dimensions?.depth || 128}D × ${scenePlan.dimensions?.height || 40}H studs
 Ground level: Y = ${scenePlan.groundLevel || 0}
+Ceiling height: ${core.ceilingHeight || core.height || 16} studs
 
 Core Structure:
-  Type: ${scenePlan.coreStructure?.type || 'building'}
-  Size: ${scenePlan.coreStructure?.width || 32}W × ${scenePlan.coreStructure?.depth || 32}D × ${scenePlan.coreStructure?.height || 16}H
-  Description: ${scenePlan.coreStructure?.description || 'Main structure'}
+  Type: ${core.type || 'building'}
+  Size: ${core.width || 32}W × ${core.depth || 32}D × ${core.height || 16}H
+  Description: ${core.description || 'Main structure'}
+  Shell parts provided: ${hasShellParts ? 'YES (floor, ceiling, walls pre-built by backend — do NOT regenerate them)' : 'NO (you MUST generate floor, ceiling, and 4 perimeter walls)'}
 
 Zones:
 ${zones || '  (none defined)'}
 
+${partitionsText ? `Interior Partitions (pre-built by backend — do NOT regenerate):\n${partitionsText}` : ''}
+
 Objects to generate (${scenePlan.objects?.length || 0} total):
 ${objects || '  (none defined)'}
+
+${lightsText ? `Planned Lights (pre-built by backend — do NOT regenerate):\n${lightsText}` : ''}
 
 Color palette:
   Primary: RGB(${palette.primary?.join(',') || '67,140,49'})
@@ -291,21 +455,20 @@ Color palette:
 Lighting:
   Time: ${lighting.timeOfDay || 'default'}
   Ambience: ${lighting.ambience || 'neutral'}
-  Point lights: ${lighting.pointLightCount || 0}
 
 Environment:
-  Generate surroundings: ${env.generateSurroundings ? 'YES' : 'NO'}
-  Boundary type: ${env.boundaryType || 'invisible_walls'}
-  Map size: ${env.mapBoundarySize?.width || 200}W × ${env.mapBoundarySize?.depth || 200}D
-  Elements: ${(env.surroundingElements || []).join(', ') || 'none'}
+  Generate surroundings: ${env.generateSurroundings ? 'YES' : 'NO (interior — no outdoor terrain)'}
+  Boundary type: ${env.boundaryType || 'none'}
 
 IMPORTANT RULES FOR GENERATION:
-1. Template objects are resolved automatically by the backend — do NOT regenerate them as instances.
-2. For custom objects, generate full Roblox instances with correct properties, sizes, and positions.
-3. Objects in a zone must stay within that zone's bounds.
-4. Build the core structure first: floor, walls, roof/ceiling, doors — fully formed and centered.
-5. Environment elements (trees, roads, rocks) go OUTSIDE the core play area.
-6. Roads should extend beyond map boundaries to the edges.
+1. If shellParts/partitions/lights are marked "pre-built by backend", do NOT output duplicate instances for them.
+2. Template objects are resolved automatically — do NOT regenerate them as instances.
+3. For custom objects, generate full Roblox instances with correct properties, sizes, and positions.
+4. Objects in a zone must stay within that zone's bounds.
+5. Furniture MUST sit on the floor: Y = groundLevel + object half-height.
+6. For INTERIORS: if shellParts were NOT provided, you MUST generate floor + ceiling + 4 perimeter walls as layer 1.
+7. Environment elements (if enabled) go OUTSIDE the core play area.
+8. No Part should have any Size axis below 0.5 studs.
 7. Use the color palette for visual consistency across all custom objects.
 8. Include terrain operations for ground, hills, and natural features.
 9. Every Part needs: Name, Size, Position, Color, Anchored, Material at minimum.
@@ -1259,30 +1422,63 @@ function generatePreviewData(scenePlan, outputData) {
 }
 
 function scoreSceneCoherence(scenePlan, outputData) {
-    let score = 0;
     const maxScore = 10;
+    let score = 0;
     const reasons = [];
+    const deductions = [];
+    const instances = Array.isArray(outputData.instances) ? outputData.instances : [];
+    const terrainOps = Array.isArray(outputData.terrain) ? outputData.terrain : [];
+    const isInterior = /interior|office|corridor|classroom|lobby|kitchen|bedroom|house/i.test(
+        String(scenePlan.sceneType || '') + ' ' + String(scenePlan.title || '')
+    );
 
-    if (scenePlan.coreStructure) { score += 1; reasons.push('core structure defined'); }
-    if (Array.isArray(scenePlan.zones) && scenePlan.zones.length > 0) { score += 1; reasons.push(`${scenePlan.zones.length} zones`); }
-    if (Array.isArray(scenePlan.objects) && scenePlan.objects.length >= 3) { score += 1; reasons.push(`${scenePlan.objects.length} planned objects`); }
-    if (scenePlan.colorPalette?.primary) { score += 1; reasons.push('color palette set'); }
-    if (scenePlan.lighting?.timeOfDay) { score += 1; reasons.push('lighting defined'); }
-    if (scenePlan.environment?.generateSurroundings) { score += 1; reasons.push('environment enabled'); }
-    if (scenePlan.environment?.boundaryType) { score += 1; reasons.push('boundary type set'); }
+    const names = instances.map(i => String(i?.properties?.Name || '').toLowerCase());
+    const hasFloor = names.some(n => /floor|baseplate/.test(n));
+    const hasCeiling = names.some(n => /ceiling|roof/.test(n));
+    const wallCount = names.filter(n => /wall/.test(n)).length;
+    const hasPartitions = names.some(n => /partition|divider|glass/.test(n));
+    const lightCount = instances.filter(i => /PointLight|SpotLight|SurfaceLight/.test(String(i?.className || ''))).length;
+    const furnitureCount = names.filter(n => /desk|chair|sofa|shelf|table|bench|counter|fridge|stool|cabinet|bookshelf/.test(n)).length;
 
-    const instanceCount = outputData.instances?.length || 0;
-    const terrainCount = outputData.terrain?.length || 0;
-    if (instanceCount >= 10) { score += 1; reasons.push(`${instanceCount} instances`); }
-    if (terrainCount >= 2) { score += 1; reasons.push(`${terrainCount} terrain ops`); }
-    if (instanceCount + terrainCount >= 20) { score += 1; reasons.push('rich output'); }
+    if (hasFloor) { score += 1; reasons.push('floor present'); }
+    else deductions.push('NO floor detected');
 
+    if (isInterior) {
+        if (hasCeiling) { score += 1; reasons.push('ceiling present'); }
+        else deductions.push('NO ceiling — interior needs one');
+
+        if (wallCount >= 4) { score += 2; reasons.push(`${wallCount} walls (full shell)`); }
+        else if (wallCount >= 2) { score += 1; reasons.push(`only ${wallCount} walls (incomplete shell)`); deductions.push('missing perimeter walls'); }
+        else { deductions.push(`only ${wallCount} wall(s) — shell is broken`); }
+
+        if (hasPartitions) { score += 1; reasons.push('interior partitions/glass'); }
+        else deductions.push('no interior subdivisions');
+
+        if (lightCount >= 2) { score += 1; reasons.push(`${lightCount} light sources`); }
+        else deductions.push(`only ${lightCount} light(s) for interior`);
+
+        if (furnitureCount >= 4) { score += 2; reasons.push(`${furnitureCount} furniture items`); }
+        else if (furnitureCount >= 1) { score += 1; reasons.push(`only ${furnitureCount} furniture (sparse)`); deductions.push('sparse furniture'); }
+        else { deductions.push('NO furniture detected'); }
+    } else {
+        if (terrainOps.length >= 2) { score += 2; reasons.push(`${terrainOps.length} terrain ops`); }
+        else if (terrainOps.length >= 1) { score += 1; reasons.push('minimal terrain'); }
+        if (instances.length >= 15) { score += 2; reasons.push(`${instances.length} instances`); }
+        else if (instances.length >= 8) { score += 1; reasons.push(`${instances.length} instances`); }
+    }
+
+    if (instances.length >= 20) { score += 1; reasons.push('substantial output'); }
+    if (scenePlan.colorPalette?.primary) { score += 1; reasons.push('palette defined'); }
+
+    const finalScore = Math.min(score, maxScore);
+    const pct = Math.round((finalScore / maxScore) * 100);
     return {
-        score: Math.min(score, maxScore),
+        score: finalScore,
         maxScore,
-        percentage: Math.round((Math.min(score, maxScore) / maxScore) * 100),
+        percentage: pct,
         reasons,
-        grade: score >= 8 ? 'excellent' : score >= 6 ? 'good' : score >= 4 ? 'fair' : 'sparse',
+        deductions,
+        grade: pct >= 80 ? 'good' : pct >= 60 ? 'fair' : pct >= 40 ? 'weak' : 'poor',
     };
 }
 
@@ -1410,6 +1606,9 @@ module.exports = {
     MAP_DIMENSIONS,
     SCALE_REFERENCE,
     buildScenePlanContext,
+    resolveShellParts,
+    resolvePartitions,
+    resolvePlanPointLights,
     validateScenePlan,
     resolveScenePlanTemplates,
     generateEnvironment,

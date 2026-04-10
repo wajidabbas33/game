@@ -40,6 +40,9 @@ const { getTemplateCatalogText, resolveTemplatePlacements } = require('./templat
 const {
     SCENE_PLANNER_PROMPT,
     buildScenePlanContext,
+    resolveShellParts,
+    resolvePartitions,
+    resolvePlanPointLights,
     validateScenePlan,
     resolveScenePlanTemplates,
     generateEnvironment,
@@ -551,26 +554,75 @@ Color palettes (use curated palettes, not raw primary colors):
   • Sand:              [210, 195, 150] to [230, 215, 175]
 
 ════════════════════════════════════════════════════════════
-MAP / LAYOUT GENERATION RULES
+ARCHITECTURAL GENERATION RULES (MANDATORY — follow this order)
 ════════════════════════════════════════════════════════════
-When the user asks for a map, terrain, room, arena, classroom, base,
-or architecture, generate structured Roblox instances, not only scripts.
+When the user asks for any built environment (interior, building, map, arena, room),
+you MUST generate it as a coherent architectural composition, not disconnected parts.
 
-Scene composition approach:
-  1. Start with the overall dimensions and ground plane.
-  2. Build the structural shell (floor, walls, ceiling/roof).
-  3. Add major features (platforms, hills, water, roads).
-  4. Place objects with correct spacing using the scale reference above.
-  5. Add detail objects (lights, decor, spawn markers).
-  6. Include surrounding environment (terrain, props, boundaries).
+STRICT CONSTRUCTION ORDER — never skip a layer:
+
+  LAYER 1 – STRUCTURAL SHELL (generate first, always)
+    • Create a Model container (e.g. "OfficeBuilding", "ClassroomBlock").
+    • Floor: Part covering the full footprint. Size = [width, 1, depth].
+      Position Y = groundLevel + 0.5. Material must match the prompt.
+    • Ceiling/Roof: Part same width × depth as floor, 1 stud thick.
+      Position Y = groundLevel + ceilingHeight + 0.5.
+    • Perimeter walls: 4 Parts (North, South, East, West).
+      Each wall: Size = [wallLength, ceilingHeight, 1].
+      Position Y = groundLevel + ceilingHeight/2.
+      Walls MUST touch the floor bottom and ceiling top — no gaps.
+    • All structural parts: Anchored = true, parent = the Model.
+
+  LAYER 2 – INTERIOR SUBDIVISION (corridors, rooms, zones)
+    • For offices/corridors: add interior partition walls that divide the
+      shell into distinct zones (corridor, lounge, kitchen, workstations).
+    • Partition walls: thinner (0.5–1 stud), same height as perimeter walls
+      or slightly shorter for a glass-over-wall look.
+    • Doorways: leave a 4-wide × 7-tall gap in partition walls.
+    • Glass partitions: use Transparency = 0.6, Material = Glass, Color = dark frame.
+      Glass pane: thin (0.2) Part nested inside a frame Part (0.5 thick).
+      Both parent to the same Model; position them at exactly the same XZ with
+      different Y or slight Z offset for layering.
+
+  LAYER 3 – FLOOR TREATMENT
+    • If the prompt mentions different floor zones (carpet area, tile, wood),
+      overlay thin (0.3 stud) color/material Parts on top of the main floor.
+    • Corridors get a distinct floor strip (often lighter / polished).
+
+  LAYER 4 – FURNITURE AND FIXTURES
+    • Place objects INTO the zones from Layer 2 — not floating in space.
+    • Furniture Y = groundLevel + leg height (desks at Y=1.7, shelves on floor Y=0).
+    • Use layoutHint for repeated objects (desk rows, chair grids).
+    • Required furniture for common interiors:
+      Office: desks, chairs, shelving, sofa/seating, kitchen counter, refrigerator.
+      Classroom: teacher desk, student desk grid, whiteboard, shelving.
+      Lobby: reception desk, seating, signage, plants.
+
+  LAYER 5 – LIGHTING
+    • Ceiling lights: PointLight or SpotLight inside a small Part (fixture housing).
+      Position Y = ceilingHeight − 0.5 (hanging from ceiling).
+      Use layoutHint row pattern along corridor center lines.
+    • Accent lights: place near furniture zones, lower brightness.
+    • For interiors: do NOT rely on outdoor sun — add explicit light instances.
+
+  LAYER 6 – DETAILS AND PROPS
+    • Wall art, plants, signage, floor mats, decorative objects.
+    • These are optional but make the scene feel finished.
+
+CRITICAL CHECKS before outputting JSON:
+  ✓ Every wall spans from floor to ceiling (no floating fragments).
+  ✓ Floor and ceiling have identical XZ footprint.
+  ✓ Furniture sits ON the floor (Y = groundLevel + object half-height).
+  ✓ Interior partitions connect to perimeter walls or other partitions.
+  ✓ At least one light source per 200 sq studs of floor area.
+  ✓ No object has Size with any axis < 0.3 (use 0.5 minimum).
 
 For map generation:
   • Create major containers first using Model instances with unique Name values.
-  • Use floor, walls, platforms, landmarks, spawn areas, and cover pieces.
   • ALWAYS include enough objects to make the scene feel complete — not just a floor.
-  • For a classroom: include floor, 4 walls, ceiling, windows, whiteboard, 10+ desk/chair pairs, lighting.
-  • For an island: include terrain layers (grass top, rock/dirt sides), hills, trees, paths, water around edges, props.
-  • For an arena: include floor, boundary walls, cover spots, spawns, center objective, spectator areas.
+  • For a classroom: floor + 4 walls + ceiling + windows + whiteboard + 10+ desk/chair pairs + lighting.
+  • For an island: terrain layers (grass top, rock sides), hills, trees, paths, water edges, props.
+  • For an arena: floor + boundary walls + cover spots + spawns + center objective + spectator areas.
   • Use Anchored = true for environment pieces unless movement is required.
   • Give gameplay-critical objects clear names: RedSpawn, BlueSpawn, HillZone, FlagBase, LobbySpawn.
   • If scripts will reference an object, that object MUST be named and generated in the same response.
@@ -2168,87 +2220,53 @@ function buildCoreStructureFallback(scenePlan, prompt) {
         ];
     }
 
-    // Indoor/enclosed scenes → closed concrete building shell
-    const buildW = Math.max(26, Math.min(64, Math.round(dims.width * 0.28)));
-    const buildD = Math.max(20, Math.min(52, Math.round(dims.depth * 0.24)));
-    const wallH = 14;
+    // Indoor/enclosed scenes → proper office shell with corridor, rooms, ceiling, partitions, lights
+    const buildW = Math.max(40, Math.min(72, Math.round(dims.width * 0.35)));
+    const buildD = Math.max(30, Math.min(50, Math.round(dims.depth * 0.3)));
+    const wallH = 15;
     const wallT = 1;
+    const corridorW = 8;
+    const halfW = buildW / 2;
+    const halfD = buildD / 2;
+    const wallColor = [85, 95, 110];
+    const floorColor = [210, 200, 185];
+    const ceilColor = [240, 240, 235];
 
-    return [
+    const parts = [
         { className: 'Model', parent: 'Workspace', properties: { Name: 'MainBuilding' } },
-        {
-            className: 'Part',
-            parent: 'MainBuilding',
-            properties: {
-                Name: 'MainFloor',
-                Size: [buildW, 1, buildD],
-                Position: [cx, groundLevel + 0.5, cz],
-                Color: [205, 205, 198],
-                Anchored: true,
-                Material: 'Concrete',
-            },
-        },
-        {
-            className: 'Part',
-            parent: 'MainBuilding',
-            properties: {
-                Name: 'Roof',
-                Size: [buildW, 1, buildD],
-                Position: [cx, groundLevel + wallH + 0.5, cz],
-                Color: [160, 160, 168],
-                Anchored: true,
-                Material: 'Concrete',
-            },
-        },
-        {
-            className: 'Part',
-            parent: 'MainBuilding',
-            properties: {
-                Name: 'WallNorth',
-                Size: [buildW, wallH, wallT],
-                Position: [cx, groundLevel + wallH / 2, cz - buildD / 2],
-                Color: [235, 235, 235],
-                Anchored: true,
-                Material: 'Concrete',
-            },
-        },
-        {
-            className: 'Part',
-            parent: 'MainBuilding',
-            properties: {
-                Name: 'WallSouth',
-                Size: [buildW, wallH, wallT],
-                Position: [cx, groundLevel + wallH / 2, cz + buildD / 2],
-                Color: [235, 235, 235],
-                Anchored: true,
-                Material: 'Concrete',
-            },
-        },
-        {
-            className: 'Part',
-            parent: 'MainBuilding',
-            properties: {
-                Name: 'WallWest',
-                Size: [wallT, wallH, buildD],
-                Position: [cx - buildW / 2, groundLevel + wallH / 2, cz],
-                Color: [232, 232, 232],
-                Anchored: true,
-                Material: 'Concrete',
-            },
-        },
-        {
-            className: 'Part',
-            parent: 'MainBuilding',
-            properties: {
-                Name: 'WallEast',
-                Size: [wallT, wallH, buildD],
-                Position: [cx + buildW / 2, groundLevel + wallH / 2, cz],
-                Color: [232, 232, 232],
-                Anchored: true,
-                Material: 'Concrete',
-            },
-        },
+        // Floor
+        { className: 'Part', parent: 'MainBuilding', properties: { Name: 'MainFloor', Size: [buildW, 1, buildD], Position: [cx, groundLevel + 0.5, cz], Color: floorColor, Anchored: true, Material: 'SmoothPlastic' } },
+        // Ceiling
+        { className: 'Part', parent: 'MainBuilding', properties: { Name: 'Ceiling', Size: [buildW, 1, buildD], Position: [cx, groundLevel + wallH + 0.5, cz], Color: ceilColor, Anchored: true, Material: 'SmoothPlastic' } },
+        // 4 perimeter walls
+        { className: 'Part', parent: 'MainBuilding', properties: { Name: 'WallNorth', Size: [buildW, wallH, wallT], Position: [cx, groundLevel + wallH / 2, cz - halfD], Color: wallColor, Anchored: true, Material: 'SmoothPlastic' } },
+        { className: 'Part', parent: 'MainBuilding', properties: { Name: 'WallSouth', Size: [buildW, wallH, wallT], Position: [cx, groundLevel + wallH / 2, cz + halfD], Color: wallColor, Anchored: true, Material: 'SmoothPlastic' } },
+        { className: 'Part', parent: 'MainBuilding', properties: { Name: 'WallWest', Size: [wallT, wallH, buildD], Position: [cx - halfW, groundLevel + wallH / 2, cz], Color: wallColor, Anchored: true, Material: 'SmoothPlastic' } },
+        { className: 'Part', parent: 'MainBuilding', properties: { Name: 'WallEast', Size: [wallT, wallH, buildD], Position: [cx + halfW, groundLevel + wallH / 2, cz], Color: wallColor, Anchored: true, Material: 'SmoothPlastic' } },
+        // Central corridor partition (west side — glass)
+        { className: 'Part', parent: 'MainBuilding', properties: { Name: 'CorridorPartitionWest', Size: [0.5, wallH, buildD - 4], Position: [cx - corridorW / 2, groundLevel + wallH / 2, cz], Color: [50, 50, 55], Anchored: true, Material: 'Glass', Transparency: 0.5 } },
+        // Central corridor partition (east side — glass)
+        { className: 'Part', parent: 'MainBuilding', properties: { Name: 'CorridorPartitionEast', Size: [0.5, wallH, buildD - 4], Position: [cx + corridorW / 2, groundLevel + wallH / 2, cz], Color: [50, 50, 55], Anchored: true, Material: 'Glass', Transparency: 0.5 } },
+        // Corridor floor strip (slightly lighter)
+        { className: 'Part', parent: 'MainBuilding', properties: { Name: 'CorridorFloor', Size: [corridorW, 0.3, buildD - 2], Position: [cx, groundLevel + 1.15, cz], Color: [220, 215, 200], Anchored: true, Material: 'SmoothPlastic' } },
     ];
+
+    // Ceiling lights along corridor (3 pendants)
+    const lightSpacing = (buildD - 6) / 2;
+    for (let i = 0; i < 3; i++) {
+        const lz = cz - (buildD / 2 - 3) + i * lightSpacing;
+        const fixName = `CeilingLight_${i}`;
+        parts.push({
+            className: 'Part', parent: 'MainBuilding',
+            properties: { Name: fixName, Size: [2, 0.5, 2], Position: [cx, groundLevel + wallH - 0.25, lz], Color: [50, 50, 55], Anchored: true, Material: 'SmoothPlastic' },
+        });
+        parts.push({
+            className: 'PointLight', parent: fixName,
+            properties: { Brightness: 1.5, Range: 28, Color: [255, 220, 180] },
+        });
+    }
+
+    return parts;
 }
 
 function shouldUseDeterministicLayoutPreview(prompt) {
@@ -3005,6 +3023,22 @@ app.post('/generate', apiLimiter, async (req, res) => {
             }
         }
 
+        // ── Resolve shellParts, partitions, pointLights from scene plan ─
+        if (scenePlan) {
+            try {
+                const shellInstances = resolveShellParts(scenePlan);
+                const partitionInstances = resolvePartitions(scenePlan);
+                const lightInstances = resolvePlanPointLights(scenePlan);
+                const planInstances = [...shellInstances, ...partitionInstances, ...lightInstances];
+                if (planInstances.length > 0) {
+                    safe.instances = [...planInstances, ...(safe.instances || [])];
+                    console.log(`🏗️  Resolved ${shellInstances.length} shell, ${partitionInstances.length} partition, ${lightInstances.length} light instances from plan`);
+                }
+            } catch (planResolveErr) {
+                console.warn('⚠️  Plan structure resolution failed:', planResolveErr.message);
+            }
+        }
+
         // ── Merge template-resolved objects (Detailed mode) ─
         if (scenePlan) {
             try {
@@ -3020,7 +3054,8 @@ app.post('/generate', apiLimiter, async (req, res) => {
         }
 
         // ── Environment generation ───────────────────────────
-        if (generateEnv !== false && scenePlan) {
+        // applyScenePlanProductionOverrides already set generateSurroundings = false for interiors.
+        if (generateEnv !== false && scenePlan && scenePlan.environment?.generateSurroundings !== false) {
             try {
                 const envResult = generateEnvironment(scenePlan);
                 const requestedPhase = Math.max(1, Math.min(3, inferRequestedPhase(prompt, session)));
