@@ -37,6 +37,7 @@ function blendColor(color, variance) {
 function deciduousTreeSmall(position, rotation) {
     const pos = position || [0, 0, 0];
     const rot = rotation || 0;
+    const leaf = 'LeafyGrass';
     return {
         instances: [
             {
@@ -52,7 +53,7 @@ function deciduousTreeSmall(position, rotation) {
                     Name: 'Trunk',
                     Size: [1.5, 8, 1.5],
                     Position: offsetPosition(pos, 0, 4, 0),
-                    Color: [101, 67, 33],
+                    Color: [72, 48, 30],
                     Anchored: true,
                     Material: 'Wood',
                     Shape: 'Cylinder',
@@ -67,9 +68,9 @@ function deciduousTreeSmall(position, rotation) {
                     Name: 'Canopy1',
                     Size: [7, 5, 7],
                     Position: offsetPosition(pos, 0, 9.5, 0),
-                    Color: blendColor([67, 140, 49], 20),
+                    Color: blendColor([52, 128, 44], 18),
                     Anchored: true,
-                    Material: 'Grass',
+                    Material: leaf,
                     Shape: 'Ball',
                 },
             },
@@ -80,10 +81,10 @@ function deciduousTreeSmall(position, rotation) {
                 properties: {
                     Name: 'Canopy2',
                     Size: [5, 4, 5],
-                    Position: offsetPosition(pos, 0, 12, 0),
-                    Color: blendColor([82, 158, 58], 15),
+                    Position: offsetPosition(pos, 0.4, 12, -0.3),
+                    Color: blendColor([62, 138, 50], 14),
                     Anchored: true,
-                    Material: 'Grass',
+                    Material: leaf,
                     Shape: 'Ball',
                 },
             },
@@ -95,6 +96,7 @@ function deciduousTreeSmall(position, rotation) {
 function deciduousTreeMedium(position, rotation) {
     const pos = position || [0, 0, 0];
     const rot = rotation || 0;
+    const leaf = 'LeafyGrass';
     return {
         instances: [
             {
@@ -107,13 +109,13 @@ function deciduousTreeMedium(position, rotation) {
                 parent: '__LAST_MODEL__',
                 properties: {
                     Name: 'Trunk',
-                    Size: [2, 12, 2],
-                    Position: offsetPosition(pos, 0, 6, 0),
-                    Color: [89, 58, 27],
+                    Size: [1.6, 11, 1.6],
+                    Position: offsetPosition(pos, 0, 5.5, 0),
+                    Color: [62, 42, 28],
                     Anchored: true,
                     Material: 'Wood',
                     Shape: 'Cylinder',
-                    CFrame: { position: offsetPosition(pos, 0, 6, 0), rotation: [0, rot, 90] },
+                    CFrame: { position: offsetPosition(pos, 0, 5.5, 0), rotation: [0, rot, 90] },
                 },
             },
             {
@@ -121,11 +123,11 @@ function deciduousTreeMedium(position, rotation) {
                 parent: '__LAST_MODEL__',
                 properties: {
                     Name: 'Canopy1',
-                    Size: [10, 7, 10],
-                    Position: offsetPosition(pos, 0, 14, 0),
-                    Color: blendColor([52, 128, 40], 20),
+                    Size: [11, 7.5, 11],
+                    Position: offsetPosition(pos, 0, 13.5, 0),
+                    Color: blendColor([48, 118, 42], 18),
                     Anchored: true,
-                    Material: 'Grass',
+                    Material: leaf,
                     Shape: 'Ball',
                 },
             },
@@ -134,11 +136,11 @@ function deciduousTreeMedium(position, rotation) {
                 parent: '__LAST_MODEL__',
                 properties: {
                     Name: 'Canopy2',
-                    Size: [8, 6, 8],
-                    Position: offsetPosition(pos, 1, 17, -1),
-                    Color: blendColor([62, 145, 48], 15),
+                    Size: [8.5, 6.5, 8.5],
+                    Position: offsetPosition(pos, 1.2, 16.5, -0.8),
+                    Color: blendColor([58, 132, 48], 14),
                     Anchored: true,
-                    Material: 'Grass',
+                    Material: leaf,
                     Shape: 'Ball',
                 },
             },
@@ -147,11 +149,24 @@ function deciduousTreeMedium(position, rotation) {
                 parent: '__LAST_MODEL__',
                 properties: {
                     Name: 'Canopy3',
-                    Size: [6, 5, 6],
-                    Position: offsetPosition(pos, -1, 19, 1),
-                    Color: blendColor([72, 155, 55], 15),
+                    Size: [6.5, 5.5, 6.5],
+                    Position: offsetPosition(pos, -1, 18.5, 1.1),
+                    Color: blendColor([68, 148, 52], 12),
                     Anchored: true,
-                    Material: 'Grass',
+                    Material: leaf,
+                    Shape: 'Ball',
+                },
+            },
+            {
+                className: 'Part',
+                parent: '__LAST_MODEL__',
+                properties: {
+                    Name: 'Canopy4',
+                    Size: [5, 4, 5],
+                    Position: offsetPosition(pos, 0.5, 20.2, -0.4),
+                    Color: blendColor([78, 158, 58], 10),
+                    Anchored: true,
+                    Material: leaf,
                     Shape: 'Ball',
                 },
             },
@@ -185,44 +200,41 @@ function pineTree(position, rotation) {
                 },
             },
             {
-                // Bottom cone layer
                 className: 'Part',
                 parent: '__LAST_MODEL__',
                 properties: {
                     Name: 'Foliage1',
-                    Size: [9, 5, 9],
+                    Size: [9, 5.5, 9],
                     Position: offsetPosition(pos, 0, 11, 0),
-                    Color: [34, 100, 34],
+                    Color: [32, 92, 38],
                     Anchored: true,
-                    Material: 'Grass',
+                    Material: 'LeafyGrass',
                     Shape: 'Ball',
                 },
             },
             {
-                // Middle cone layer
                 className: 'Part',
                 parent: '__LAST_MODEL__',
                 properties: {
                     Name: 'Foliage2',
                     Size: [7, 5, 7],
                     Position: offsetPosition(pos, 0, 15, 0),
-                    Color: [30, 90, 30],
+                    Color: [28, 84, 34],
                     Anchored: true,
-                    Material: 'Grass',
+                    Material: 'LeafyGrass',
                     Shape: 'Ball',
                 },
             },
             {
-                // Top cone layer
                 className: 'Part',
                 parent: '__LAST_MODEL__',
                 properties: {
                     Name: 'Foliage3',
-                    Size: [4, 4, 4],
+                    Size: [4.5, 4.2, 4.5],
                     Position: offsetPosition(pos, 0, 19, 0),
-                    Color: [25, 82, 25],
+                    Color: [24, 76, 30],
                     Anchored: true,
-                    Material: 'Grass',
+                    Material: 'LeafyGrass',
                     Shape: 'Ball',
                 },
             },
@@ -306,6 +318,8 @@ function roadSegment(position, rotation, length, width) {
 function desk(position, rotation) {
     const pos = position || [0, 0, 0];
     const rot = rotation || 0;
+    const metal = [138, 140, 145];
+    const topCol = [188, 175, 148];
     return {
         instances: [
             {
@@ -314,71 +328,43 @@ function desk(position, rotation) {
                 properties: { Name: 'Desk_' + Math.floor(Math.random() * 9999) },
             },
             {
-                // Desktop surface
                 className: 'Part',
                 parent: '__LAST_MODEL__',
                 properties: {
                     Name: 'Desktop',
-                    Size: [5, 0.4, 3],
-                    Position: offsetPosition(pos, 0, 3.2, 0),
-                    Color: [156, 114, 68],
+                    Size: [5.2, 0.22, 2.95],
+                    Position: offsetPosition(pos, 0, 3.08, 0),
+                    Color: topCol,
                     Anchored: true,
-                    Material: 'Wood',
-                    CFrame: { position: offsetPosition(pos, 0, 3.2, 0), rotation: [0, rot, 0] },
+                    Material: 'WoodPlanks',
+                    CFrame: { position: offsetPosition(pos, 0, 3.08, 0), rotation: [0, rot, 0] },
                 },
             },
             {
-                // Front-left leg
                 className: 'Part',
                 parent: '__LAST_MODEL__',
                 properties: {
-                    Name: 'Leg1',
-                    Size: [0.4, 3, 0.4],
-                    Position: offsetPosition(pos, -2.1, 1.5, -1.1),
-                    Color: [120, 88, 52],
+                    Name: 'ModestyPanel',
+                    Size: [4.6, 1.05, 0.08],
+                    Position: offsetPosition(pos, 0, 2.05, 1.12),
+                    Color: metal,
                     Anchored: true,
-                    Material: 'Wood',
+                    Material: 'Metal',
+                    CFrame: { position: offsetPosition(pos, 0, 2.05, 1.12), rotation: [0, rot, 0] },
                 },
             },
-            {
-                // Front-right leg
+            ...[-2.35, 2.35].flatMap((lx, i) => [-0.95, 0.95].map((lz, j) => ({
                 className: 'Part',
                 parent: '__LAST_MODEL__',
                 properties: {
-                    Name: 'Leg2',
-                    Size: [0.4, 3, 0.4],
-                    Position: offsetPosition(pos, 2.1, 1.5, -1.1),
-                    Color: [120, 88, 52],
+                    Name: `Leg_${i * 2 + j + 1}`,
+                    Size: [0.14, 2.85, 0.14],
+                    Position: offsetPosition(pos, lx, 1.42, lz),
+                    Color: metal,
                     Anchored: true,
-                    Material: 'Wood',
+                    Material: 'Metal',
                 },
-            },
-            {
-                // Back-left leg
-                className: 'Part',
-                parent: '__LAST_MODEL__',
-                properties: {
-                    Name: 'Leg3',
-                    Size: [0.4, 3, 0.4],
-                    Position: offsetPosition(pos, -2.1, 1.5, 1.1),
-                    Color: [120, 88, 52],
-                    Anchored: true,
-                    Material: 'Wood',
-                },
-            },
-            {
-                // Back-right leg
-                className: 'Part',
-                parent: '__LAST_MODEL__',
-                properties: {
-                    Name: 'Leg4',
-                    Size: [0.4, 3, 0.4],
-                    Position: offsetPosition(pos, 2.1, 1.5, 1.1),
-                    Color: [120, 88, 52],
-                    Anchored: true,
-                    Material: 'Wood',
-                },
-            },
+            }))),
         ],
         terrain: [],
     };
@@ -387,6 +373,8 @@ function desk(position, rotation) {
 function chair(position, rotation) {
     const pos = position || [0, 0, 0];
     const rot = rotation || 0;
+    const metal = [120, 122, 128];
+    const fabric = [92, 95, 102];
     return {
         instances: [
             {
@@ -395,81 +383,43 @@ function chair(position, rotation) {
                 properties: { Name: 'Chair_' + Math.floor(Math.random() * 9999) },
             },
             {
-                // Seat
                 className: 'Part',
                 parent: '__LAST_MODEL__',
                 properties: {
                     Name: 'Seat',
-                    Size: [2.4, 0.4, 2.4],
-                    Position: offsetPosition(pos, 0, 2.2, 0),
-                    Color: [140, 100, 58],
+                    Size: [2.35, 0.28, 2.15],
+                    Position: offsetPosition(pos, 0, 2.18, 0),
+                    Color: fabric,
                     Anchored: true,
-                    Material: 'Wood',
-                    CFrame: { position: offsetPosition(pos, 0, 2.2, 0), rotation: [0, rot, 0] },
+                    Material: 'Fabric',
+                    CFrame: { position: offsetPosition(pos, 0, 2.18, 0), rotation: [0, rot, 0] },
                 },
             },
             {
-                // Backrest
                 className: 'Part',
                 parent: '__LAST_MODEL__',
                 properties: {
                     Name: 'Backrest',
-                    Size: [2.4, 2.5, 0.3],
-                    Position: offsetPosition(pos, 0, 3.65, -1.05),
-                    Color: [140, 100, 58],
+                    Size: [2.25, 2.35, 0.14],
+                    Position: offsetPosition(pos, 0, 3.45, -0.95),
+                    Color: fabric,
                     Anchored: true,
-                    Material: 'Wood',
-                    CFrame: { position: offsetPosition(pos, 0, 3.65, -1.05), rotation: [0, rot, 0] },
+                    Material: 'Fabric',
+                    CFrame: { position: offsetPosition(pos, 0, 3.45, -0.95), rotation: [0, rot, 0] },
                 },
             },
-            {
+            ...[-0.88, 0.88].flatMap((lx, i) => [-0.78, 0.78].map((lz, j) => ({
                 className: 'Part',
                 parent: '__LAST_MODEL__',
                 properties: {
-                    Name: 'Leg1',
-                    Size: [0.3, 2, 0.3],
-                    Position: offsetPosition(pos, -0.9, 1, -0.9),
-                    Color: [110, 78, 44],
+                    Name: `ChairLeg_${i * 2 + j + 1}`,
+                    Size: [0.11, 1.95, 0.11],
+                    Position: offsetPosition(pos, lx, 0.98, lz),
+                    Color: metal,
                     Anchored: true,
-                    Material: 'Wood',
+                    Material: 'Metal',
                 },
-            },
-            {
-                className: 'Part',
-                parent: '__LAST_MODEL__',
-                properties: {
-                    Name: 'Leg2',
-                    Size: [0.3, 2, 0.3],
-                    Position: offsetPosition(pos, 0.9, 1, -0.9),
-                    Color: [110, 78, 44],
-                    Anchored: true,
-                    Material: 'Wood',
-                },
-            },
-            {
-                className: 'Part',
-                parent: '__LAST_MODEL__',
-                properties: {
-                    Name: 'Leg3',
-                    Size: [0.3, 2, 0.3],
-                    Position: offsetPosition(pos, -0.9, 1, 0.9),
-                    Color: [110, 78, 44],
-                    Anchored: true,
-                    Material: 'Wood',
-                },
-            },
-            {
-                className: 'Part',
-                parent: '__LAST_MODEL__',
-                properties: {
-                    Name: 'Leg4',
-                    Size: [0.3, 2, 0.3],
-                    Position: offsetPosition(pos, 0.9, 1, 0.9),
-                    Color: [110, 78, 44],
-                    Anchored: true,
-                    Material: 'Wood',
-                },
-            },
+            }))),
         ],
         terrain: [],
     };
@@ -938,12 +888,12 @@ const { EXTENDED_TEMPLATE_REGISTRY } = require('./templates-extended');
 
 const TEMPLATE_REGISTRY = {
     deciduous_tree_small:  { fn: deciduousTreeSmall,  category: 'nature',       partCount: 4,  description: 'Small leafy tree, ~12 studs tall',                    footprintRadius: 4,  preferredSpacing: 12, placementTags: ['nature', 'tree', 'perimeter'] },
-    deciduous_tree_medium: { fn: deciduousTreeMedium, category: 'nature',       partCount: 5,  description: 'Medium leafy tree, ~19 studs tall',                   footprintRadius: 5,  preferredSpacing: 16, placementTags: ['nature', 'tree', 'perimeter'] },
+    deciduous_tree_medium: { fn: deciduousTreeMedium, category: 'nature',       partCount: 6,  description: 'Medium leafy tree (LeafyGrass canopy), ~20 studs',   footprintRadius: 5,  preferredSpacing: 16, placementTags: ['nature', 'tree', 'perimeter'] },
     pine_tree:             { fn: pineTree,            category: 'nature',       partCount: 5,  description: 'Conical pine tree, ~19 studs tall',                  footprintRadius: 5,  preferredSpacing: 16, placementTags: ['nature', 'tree', 'perimeter'] },
     stone_path:            { fn: stonePathSegment,    category: 'path',         partCount: 1,  description: 'Flat stone path segment',                             footprintRadius: 2,  preferredSpacing: 4,  placementTags: ['path', 'linear'] },
     road_segment:          { fn: roadSegment,         category: 'path',         partCount: 3,  description: 'Road with center line',                              footprintRadius: 8,  preferredSpacing: 16, placementTags: ['path', 'road', 'perimeter'] },
-    desk:                  { fn: desk,                category: 'furniture',    partCount: 6,  description: 'Wooden desk, ~3.4 studs tall',                      footprintRadius: 3,  preferredSpacing: 7,  placementTags: ['furniture', 'interior', 'grid'] },
-    chair:                 { fn: chair,               category: 'furniture',    partCount: 7,  description: 'Wooden chair, ~4.9 studs tall',                     footprintRadius: 2,  preferredSpacing: 5,  placementTags: ['furniture', 'interior', 'grid'] },
+    desk:                  { fn: desk,                category: 'furniture',    partCount: 6,  description: 'School-style desk, laminate top + metal legs',      footprintRadius: 3,  preferredSpacing: 7,  placementTags: ['furniture', 'interior', 'grid'] },
+    chair:                 { fn: chair,               category: 'furniture',    partCount: 6,  description: 'Student chair, fabric seat + metal legs',           footprintRadius: 2,  preferredSpacing: 5,  placementTags: ['furniture', 'interior', 'grid'] },
     bench:                 { fn: bench,               category: 'furniture',    partCount: 5,  description: 'Park bench with metal legs',                        footprintRadius: 4,  preferredSpacing: 12, placementTags: ['furniture', 'pathside', 'perimeter'] },
     street_lamp:           { fn: streetLamp,          category: 'lighting',     partCount: 4,  description: 'Street lamp with PointLight, ~15 studs tall',       footprintRadius: 2,  preferredSpacing: 14, placementTags: ['lighting', 'pathside', 'perimeter'] },
     small_pond:            { fn: smallPond,           category: 'nature',       partCount: 2,  description: 'Small pond with rim and water, ~12 stud diameter',  footprintRadius: 7,  preferredSpacing: 18, placementTags: ['nature', 'water', 'perimeter'] },

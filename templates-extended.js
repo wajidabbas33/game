@@ -759,11 +759,14 @@ function trashBin(position) {
                 properties: { Name: 'TrashBin_' + Math.floor(Math.random() * 9999) },
             },
             { className: 'Part', parent: '__LAST_MODEL__', properties: {
-                Name: 'Bin', Size: [1.2, 2.2, 1.2], Position: offsetPosition(pos, 0, 1.1, 0),
-                Color: [85, 85, 88], Anchored: true, Material: 'Metal' } },
+                Name: 'Bin', Size: [1.35, 2.45, 1.35], Position: offsetPosition(pos, 0, 1.22, 0),
+                Color: [72, 74, 78], Anchored: true, Material: 'Metal' } },
             { className: 'Part', parent: '__LAST_MODEL__', properties: {
-                Name: 'Rim', Size: [1.3, 0.1, 1.3], Position: offsetPosition(pos, 0, 2.25, 0),
-                Color: [100, 100, 105], Anchored: true, Material: 'Metal' } },
+                Name: 'Rim', Size: [1.42, 0.12, 1.42], Position: offsetPosition(pos, 0, 2.38, 0),
+                Color: [95, 96, 100], Anchored: true, Material: 'Metal' } },
+            { className: 'Part', parent: '__LAST_MODEL__', properties: {
+                Name: 'LidHint', Size: [1.15, 0.08, 0.35], Position: offsetPosition(pos, 0, 2.32, 0.45),
+                Color: [110, 112, 118], Anchored: true, Material: 'Metal' } },
         ],
         terrain: [],
     };
@@ -1022,7 +1025,7 @@ const EXTENDED_TEMPLATE_REGISTRY = {
     coffee_table:         { fn: coffeeTable,       category: 'furniture', partCount: 5, description: 'Low coffee table with metal legs', footprintRadius: 2, preferredSpacing: 3, placementTags: ['furniture', 'interior', 'paired'] },
     planter_indoor:       { fn: planterIndoor,     category: 'nature',    partCount: 3, description: 'Decorative indoor plant in pot', footprintRadius: 1, preferredSpacing: 4, placementTags: ['nature', 'interior', 'accent'] },
     coat_rack:            { fn: coatRack,          category: 'furniture', partCount: 6, description: 'Standing wooden coat rack', footprintRadius: 1, preferredSpacing: 3, placementTags: ['furniture', 'interior', 'accent'] },
-    trash_bin:            { fn: trashBin,          category: 'furniture', partCount: 2, description: 'Small metal trash bin', footprintRadius: 1, preferredSpacing: 5, placementTags: ['furniture', 'interior', 'accent'] },
+    trash_bin:            { fn: trashBin,          category: 'furniture', partCount: 3, description: 'Metal trash bin with rim and lid detail', footprintRadius: 1, preferredSpacing: 5, placementTags: ['furniture', 'interior', 'accent'] },
     wall_art:             { fn: wallArt,           category: 'furniture', partCount: 2, description: 'Framed wall art', footprintRadius: 2, preferredSpacing: 5, placementTags: ['furniture', 'interior', 'wall-mount'] },
 
     // Exterior

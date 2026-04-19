@@ -165,9 +165,10 @@ const ROOM_LAYOUTS = {
                     { name: 'WhiteboardFrame', className: 'Part', size: [18.6, 7.6, 0.45], material: 'Metal', color: [130, 132, 138], wallMount: 'front', elevation: 5.8, wallGap: 0.45, offsetX: 5 },
                     { name: 'WhiteboardTray', className: 'Part', size: [18, 0.35, 0.9], material: 'Metal', color: [120, 118, 115], wallMount: 'front', elevation: 2.15, wallGap: 0.35, offsetX: 5 },
                     // Teacher station — large, clearly readable (not “small boxes”)
-                    { name: 'TeacherDesk', className: 'Part', size: [11, 3.4, 4.2], material: 'WoodPlanks', color: [110, 75, 42], wallMount: 'front', elevation: 1.75, wallGap: 5.5 },
-                    { name: 'TeacherDeskTop', className: 'Part', size: [11.5, 0.35, 4.6], material: 'WoodPlanks', color: [145, 98, 55], wallMount: 'front', elevation: 3.45, wallGap: 5.5 },
-                    { name: 'TeacherChair', className: 'Part', size: [3.2, 4.2, 3.2], material: 'Fabric', color: [52, 52, 58], wallMount: 'front', elevation: 2.1, wallGap: 10 },
+                    // elevation = world Y center with groundLevel 0; floor top ≈ 1 — keep centers above floor
+                    { name: 'TeacherDesk', className: 'Part', size: [11, 3.4, 4.2], material: 'WoodPlanks', color: [110, 75, 42], wallMount: 'front', elevation: 2.75, wallGap: 5.5 },
+                    { name: 'TeacherDeskTop', className: 'Part', size: [11.5, 0.35, 4.6], material: 'WoodPlanks', color: [145, 98, 55], wallMount: 'front', elevation: 3.55, wallGap: 5.5 },
+                    { name: 'TeacherChair', className: 'Part', size: [3.2, 4.2, 3.2], material: 'Fabric', color: [52, 52, 58], wallMount: 'front', elevation: 3.15, wallGap: 10 },
                 ],
             },
             {
@@ -1013,31 +1014,43 @@ function promptRequestsInteriorOnly(promptText) {
     return true;
 }
 
-function resolveCustomObjectPosition(custom, bounds, roomDims) {
+/**
+ * Wall thickness must match generateArchitecturalShell (default 1.2).
+ * Boards were placed using -halfD + depth/2, which puts them *inside* the wall slab — invisible from the room.
+ */
+function resolveCustomObjectPosition(custom, bounds, roomDims, groundLevel = 0) {
     const centerX = (bounds.minX + bounds.maxX) / 2;
     const centerZ = (bounds.minZ + bounds.maxZ) / 2;
     const size = Array.isArray(custom.size) ? custom.size : [4, 4, 4];
-    const y = typeof custom.elevation === 'number' ? custom.elevation : size[1] / 2;
-    // Allow custom objects to opt into a bigger gap from the wall (e.g. teacher desk in front of a whiteboard).
-    const wallGap = typeof custom.wallGap === 'number' ? custom.wallGap : 0.35;
+    const wallT = typeof custom._wallThickness === 'number' ? custom._wallThickness : 1.2;
     const halfW = roomDims.width / 2;
     const halfD = roomDims.depth / 2;
+    // Extra inset (studs) from inner wall plane into the room — keeps boards off z-fighting with drywall.
+    const wallGap = typeof custom.wallGap === 'number' ? custom.wallGap : 0.1;
 
     let x = centerX;
     let z = centerZ;
 
     if (custom.wallMount === 'front') {
-        z = -halfD + size[2] / 2 + wallGap;
+        const innerFaceZ = -halfD + wallT;
+        z = innerFaceZ + size[2] / 2 + wallGap;
     } else if (custom.wallMount === 'back') {
-        z = halfD - size[2] / 2 - wallGap;
+        const innerFaceZ = halfD - wallT;
+        z = innerFaceZ - size[2] / 2 - wallGap;
     } else if (custom.wallMount === 'left') {
-        x = -halfW + size[0] / 2 + wallGap;
+        const innerFaceX = -halfW + wallT;
+        x = innerFaceX + size[0] / 2 + wallGap;
     } else if (custom.wallMount === 'right') {
-        x = halfW - size[0] / 2 - wallGap;
+        const innerFaceX = halfW - wallT;
+        x = innerFaceX - size[0] / 2 - wallGap;
     }
 
     if (typeof custom.offsetX === 'number') x += custom.offsetX;
     if (typeof custom.offsetZ === 'number') z += custom.offsetZ;
+
+    const y = typeof custom.elevation === 'number'
+        ? groundLevel + custom.elevation
+        : groundLevel + size[1] / 2;
 
     return [x, y, z];
 }
@@ -1232,7 +1245,7 @@ function layoutToScenePlan(roomType, roomLayout, promptText) {
         // Add custom objects
         if (Array.isArray(zone.customObjects)) {
             for (const custom of zone.customObjects) {
-                const position = resolveCustomObjectPosition(custom, bounds, dims);
+                const position = resolveCustomObjectPosition(custom, bounds, dims, 0);
                 objects.push({
                     type: 'custom',
                     name: custom.name,
@@ -2131,6 +2144,9 @@ function generateCustomObjectInstances(scenePlan, parentModelName = 'MainBuildin
             props.Reflectance = obj.reflectance;
         } else if (/whiteboard/i.test(String(obj.name)) && /Plastic|SmoothPlastic/i.test(String(obj.material))) {
             props.Reflectance = 0.12;
+        }
+        if (/chalk|whiteboard|board/i.test(String(obj.name))) {
+            props.CastShadow = true;
         }
         instances.push({
             className: obj.className || 'Part',
