@@ -159,16 +159,17 @@ const ROOM_LAYOUTS = {
                 areaRatio: 0.18,
                 requiredProps: [],
                 customObjects: [
-                    // Front wall: green chalkboard (classic classroom) + whiteboard — readable sizes, wall-flush
-                    { name: 'ChalkBoard', className: 'Part', size: [11, 5, 0.35], material: 'Slate', color: [42, 92, 58], wallMount: 'front', elevation: 5.2, wallGap: 0.22, offsetX: -11 },
-                    { name: 'Whiteboard', className: 'Part', size: [18, 7, 0.35], material: 'Plastic', color: [252, 252, 252], wallMount: 'front', elevation: 5.8, wallGap: 0.22, offsetX: 5 },
-                    { name: 'WhiteboardFrame', className: 'Part', size: [18.6, 7.6, 0.45], material: 'Metal', color: [130, 132, 138], wallMount: 'front', elevation: 5.8, wallGap: 0.45, offsetX: 5 },
+                    // Front wall: realistic chalkboard + whiteboard set (with frames/trays)
+                    { name: 'ChalkBoard', className: 'Part', size: [11.5, 5.2, 0.22], material: 'Slate', color: [24, 58, 34], wallMount: 'front', elevation: 5.2, wallGap: 0.18, offsetX: -11 },
+                    { name: 'ChalkBoardFrame', className: 'Part', size: [12.1, 5.8, 0.28], material: 'WoodPlanks', color: [94, 70, 42], wallMount: 'front', elevation: 5.2, wallGap: 0.36, offsetX: -11 },
+                    { name: 'ChalkTray', className: 'Part', size: [11.2, 0.24, 0.7], material: 'WoodPlanks', color: [108, 82, 50], wallMount: 'front', elevation: 2.48, wallGap: 0.28, offsetX: -11 },
+                    { name: 'Whiteboard', className: 'Part', size: [18, 7, 0.2], material: 'SmoothPlastic', color: [252, 252, 252], wallMount: 'front', elevation: 5.8, wallGap: 0.2, offsetX: 5 },
+                    { name: 'WhiteboardFrame', className: 'Part', size: [18.6, 7.6, 0.28], material: 'Metal', color: [130, 132, 138], wallMount: 'front', elevation: 5.8, wallGap: 0.4, offsetX: 5 },
                     { name: 'WhiteboardTray', className: 'Part', size: [18, 0.35, 0.9], material: 'Metal', color: [120, 118, 115], wallMount: 'front', elevation: 2.15, wallGap: 0.35, offsetX: 5 },
-                    // Teacher station — large, clearly readable (not “small boxes”)
-                    // elevation = world Y center with groundLevel 0; floor top ≈ 1 — keep centers above floor
-                    { name: 'TeacherDesk', className: 'Part', size: [11, 3.4, 4.2], material: 'WoodPlanks', color: [110, 75, 42], wallMount: 'front', elevation: 2.75, wallGap: 5.5 },
-                    { name: 'TeacherDeskTop', className: 'Part', size: [11.5, 0.35, 4.6], material: 'WoodPlanks', color: [145, 98, 55], wallMount: 'front', elevation: 3.55, wallGap: 5.5 },
-                    { name: 'TeacherChair', className: 'Part', size: [3.2, 4.2, 3.2], material: 'Fabric', color: [52, 52, 58], wallMount: 'front', elevation: 3.15, wallGap: 10 },
+                    // Teacher station — less bulky proportions, clearer material contrast.
+                    { name: 'TeacherDesk', className: 'Part', size: [8.8, 2.7, 3.2], material: 'WoodPlanks', color: [104, 74, 42], wallMount: 'front', elevation: 2.35, wallGap: 5.7 },
+                    { name: 'TeacherDeskTop', className: 'Part', size: [9.2, 0.28, 3.45], material: 'SmoothPlastic', color: [224, 219, 210], wallMount: 'front', elevation: 3.08, wallGap: 5.7 },
+                    { name: 'TeacherChair', className: 'Part', size: [2.6, 3.4, 2.6], material: 'Fabric', color: [56, 58, 65], wallMount: 'front', elevation: 2.78, wallGap: 9.6 },
                 ],
             },
             {
@@ -197,7 +198,7 @@ const ROOM_LAYOUTS = {
                 purpose: 'Door entry and movement lane',
                 position: 'back-left',
                 areaRatio: 0.07,
-                requiredProps: ['trash_bin'],
+                requiredProps: [],
             },
         ],
         wallTreatment: {
@@ -1165,6 +1166,18 @@ function layoutToScenePlan(roomType, roomLayout, promptText) {
                     notes: `${zone.purpose} — ${template}`,
                 });
             }
+        }
+
+        // Classroom safety rail: keep one dustbin visible near the entry door every time.
+        if (roomType === 'classroom' && zone.name === 'entry_area') {
+            objects.push({
+                template: 'trash_bin',
+                count: 1,
+                zone: zone.name,
+                position: [-(dims.width / 2) + 6.2, 0, (dims.depth / 2) - 4.2],
+                rotation: 0,
+                notes: 'Forced visible classroom dustbin near back-left door',
+            });
         }
 
         // Add grouping-based furniture
