@@ -933,6 +933,9 @@ function hillMedium(position) {
 
 // ── TEMPLATE REGISTRY ────────────────────────────────────────
 
+// Import extended templates (café, office, kitchen, interior, exterior)
+const { EXTENDED_TEMPLATE_REGISTRY } = require('./templates-extended');
+
 const TEMPLATE_REGISTRY = {
     deciduous_tree_small:  { fn: deciduousTreeSmall,  category: 'nature',       partCount: 4,  description: 'Small leafy tree, ~12 studs tall',                    footprintRadius: 4,  preferredSpacing: 12, placementTags: ['nature', 'tree', 'perimeter'] },
     deciduous_tree_medium: { fn: deciduousTreeMedium, category: 'nature',       partCount: 5,  description: 'Medium leafy tree, ~19 studs tall',                   footprintRadius: 5,  preferredSpacing: 16, placementTags: ['nature', 'tree', 'perimeter'] },
@@ -951,6 +954,8 @@ const TEMPLATE_REGISTRY = {
     wooden_fence:          { fn: woodenFence,         category: 'architecture', partCount: 5,  description: 'Wooden fence with posts and rails',                  footprintRadius: 4,  preferredSpacing: 6,  placementTags: ['architecture', 'boundary'] },
     hill_small:            { fn: hillSmall,           category: 'terrain',      partCount: 0,  description: 'Small grass hill, terrain-based, radius 14',         footprintRadius: 14, preferredSpacing: 18, placementTags: ['terrain', 'landform'] },
     hill_medium:           { fn: hillMedium,          category: 'terrain',      partCount: 0,  description: 'Medium grass/ground hill, terrain-based, radius 22', footprintRadius: 22, preferredSpacing: 24, placementTags: ['terrain', 'landform'] },
+    // Merge all extended templates (café, office, kitchen, interior, exterior)
+    ...EXTENDED_TEMPLATE_REGISTRY,
 };
 
 // ── Public API ───────────────────────────────────────────────

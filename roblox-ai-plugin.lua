@@ -401,8 +401,25 @@ urlPad.PaddingLeft = UDim.new(0, 10)
 urlPad.PaddingRight = UDim.new(0, 10)
 urlPad.Parent = urlBox
 
-local saveUrlBtn = makeButton("Save Endpoint", 5, C.accentDim, 34, connectionCard)
-makeLabel("Endpoint used by the plugin: POST /generate", 6, 16, C.subtext, false, false, connectionCard, Enum.Font.Gotham, 11)
+local connectionBtnRow = Instance.new("Frame")
+connectionBtnRow.Size = UDim2.new(1, -24, 0, 34)
+connectionBtnRow.BackgroundTransparency = 1
+connectionBtnRow.LayoutOrder = 5
+connectionBtnRow.Parent = connectionCard
+
+local connectionBtnLayout = Instance.new("UIListLayout")
+connectionBtnLayout.FillDirection = Enum.FillDirection.Horizontal
+connectionBtnLayout.Padding = UDim.new(0, 8)
+connectionBtnLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+connectionBtnLayout.SortOrder = Enum.SortOrder.LayoutOrder
+connectionBtnLayout.Parent = connectionBtnRow
+
+local saveUrlBtn = makeInlineButton("Save Endpoint", 1, C.accentDim, connectionBtnRow, UDim2.new(0.5, -4, 1, 0))
+saveUrlBtn.TextSize = 12
+local testConnectionBtn = makeInlineButton("Test Connection", 2, C.surfaceAlt, connectionBtnRow, UDim2.new(0.5, -4, 1, 0))
+testConnectionBtn.TextSize = 12
+
+makeLabel("Endpoint used by the plugin: POST /generate and GET /health", 6, 16, C.subtext, false, false, connectionCard, Enum.Font.Gotham, 11)
 
 local buildCard = makeCard(3)
 makeLabel("Build Request", 1, 18, C.white, true, false, buildCard, Enum.Font.GothamBold, 14)
@@ -560,22 +577,28 @@ qualityToggle.BackgroundColor3 = C.surfaceAlt
 qualityToggle.TextColor3 = C.white
 qualityToggle.Font = Enum.Font.GothamMedium
 qualityToggle.TextSize = 11
-qualityToggle.Text = "⚡ Quick"
+qualityToggle.Text = "🔬 Detailed"
 qualityToggle.LayoutOrder = 1
 qualityToggle.Parent = optionsRow
 applyCorner(qualityToggle, 6)
 applyStroke(qualityToggle, C.border, 1, 0.4)
 
-local isDetailedMode = false
-qualityToggle.MouseButton1Click:Connect(function()
-    isDetailedMode = not isDetailedMode
+local isDetailedMode = true
+local function updateQualityToggle()
     if isDetailedMode then
-        qualityToggle.Text = "\xF0\x9F\x94\xAC Detailed"
+        qualityToggle.Text = "🔬 Detailed"
         qualityToggle.BackgroundColor3 = C.accent
     else
-        qualityToggle.Text = "\xE2\x9A\xA1 Quick"
+        qualityToggle.Text = "⚡ Quick"
         qualityToggle.BackgroundColor3 = C.surfaceAlt
     end
+end
+
+updateQualityToggle()
+
+qualityToggle.MouseButton1Click:Connect(function()
+    isDetailedMode = not isDetailedMode
+    updateQualityToggle()
 end)
 
 -- Environment toggle
@@ -1188,6 +1211,54 @@ local function buildPreviewSummary(data, targetParent)
         lines[#lines + 1] = string.format("Phase preview: %d of %d", data.currentPhase, data.totalPhases)
     end
 
+    -- Quality grade display
+    if type(data.quality) == "table" then
+        local q = data.quality
+        local gradeIcons = {
+            good = "🟢",
+            acceptable = "🟡",
+            weak = "🟠",
+            poor = "🔴",
+        }
+        local icon = gradeIcons[q.grade] or "⚪"
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = string.format(
+            "%s Quality: %s (%s)",
+            icon,
+            string.upper(tostring(q.grade or "unknown")),
+            tostring(q.overall or "?")
+        )
+        if type(q.scores) == "table" then
+            local scoreNames = {
+                "structuralCompleteness", "zoneCoverage", "objectDensity",
+                "materialConsistency", "lightingPresence", "promptFulfillment",
+            }
+            local scoreParts = {}
+            for _, key in ipairs(scoreNames) do
+                if q.scores[key] then
+                    local shortKey = key
+                        :gsub("structuralCompleteness", "Structure")
+                        :gsub("zoneCoverage", "Zones")
+                        :gsub("objectDensity", "Density")
+                        :gsub("materialConsistency", "Materials")
+                        :gsub("lightingPresence", "Lighting")
+                        :gsub("promptFulfillment", "Prompt")
+                    scoreParts[#scoreParts + 1] = string.format("%s=%s", shortKey, tostring(q.scores[key]))
+                end
+            end
+            if #scoreParts > 0 then
+                lines[#lines + 1] = "  " .. table.concat(scoreParts, "  ")
+            end
+        end
+        if type(q.feedback) == "table" then
+            for _, fb in ipairs(q.feedback) do
+                if type(fb) == "string" and (fb:find("Missing") or fb:find("empty") or fb:find("0%%")) then
+                    lines[#lines + 1] = "  ⚠ " .. fb
+                end
+            end
+        end
+    end
+
     return table.concat(lines, "\n")
 end
 
@@ -1728,6 +1799,13 @@ local function tryApplyProperty(inst, prop, value)
                 inst[resolvedProp] = Vector3.new(value.X, value.Y or 0, value.Z or 0)
             end
 
+        -- Decal / Texture / SurfaceGui: Face uses Enum.NormalId, not Enum.Face
+        elseif resolvedProp == "Face" and type(value) == "string" then
+            local nid = Enum.NormalId[value]
+            if nid then
+                inst.Face = nid
+            end
+
         -- Color3
         elseif resolvedProp == "Color" or resolvedProp:match("Color3$") then
             if type(value) == "table" and #value == 3 then
@@ -1943,6 +2021,29 @@ local function applyChanges(data, targetParent)
                 end
             end
         end
+    end
+
+    -- Apply atmospheric Lighting service configuration
+    if type(data.lightingConfig) == "table" then
+        local lighting = game:GetService("Lighting")
+        pcall(function()
+            local lc = data.lightingConfig
+            -- Color3 properties
+            for _, colorProp in ipairs({"Ambient", "OutdoorAmbient", "FogColor", "ColorShift_Top", "ColorShift_Bottom"}) do
+                if type(lc[colorProp]) == "table" and #lc[colorProp] == 3 then
+                    lighting[colorProp] = Color3.fromRGB(lc[colorProp][1], lc[colorProp][2], lc[colorProp][3])
+                end
+            end
+            -- Numeric properties
+            for _, numProp in ipairs({"Brightness", "ClockTime", "GeographicLatitude", "FogEnd", "EnvironmentDiffuseScale", "EnvironmentSpecularScale", "ExposureCompensation"}) do
+                if type(lc[numProp]) == "number" then
+                    lighting[numProp] = lc[numProp]
+                end
+            end
+            if type(lc.GlobalShadows) == "boolean" then
+                lighting.GlobalShadows = lc.GlobalShadows
+            end
+        end)
     end
 
     -- Create scripts
@@ -2180,7 +2281,20 @@ local function doGenerate(promptText)
                             setStatus("Preview has validation errors — apply is blocked.", C.orange)
                         else
                             setApplyReady(true)
-                            setStatus("Preview ready. Review the backend response, then apply.", C.green)
+                            -- Quality-aware status message
+                            local qualityGrade = type(data.quality) == "table" and data.quality.grade or nil
+                            local qualityScore = type(data.quality) == "table" and data.quality.overall or nil
+                            if qualityGrade == "good" then
+                                setStatus(string.format("Preview ready. Quality: GOOD (%s). Review and apply.", tostring(qualityScore or "?")), C.green)
+                            elseif qualityGrade == "acceptable" then
+                                setStatus(string.format("Preview ready. Quality: ACCEPTABLE (%s). Some areas could improve.", tostring(qualityScore or "?")), C.green)
+                            elseif qualityGrade == "weak" then
+                                setStatus(string.format("Preview ready. Quality: WEAK (%s). Output needs improvement.", tostring(qualityScore or "?")), C.orange)
+                            elseif qualityGrade == "poor" then
+                                setStatus(string.format("Preview ready. Quality: POOR (%s). Consider regenerating.", tostring(qualityScore or "?")), C.red)
+                            else
+                                setStatus("Preview ready. Review the backend response, then apply.", C.green)
+                            end
                         end
                     else
                         updateDemoViewers(data, targetParent, false)
@@ -2299,6 +2413,52 @@ saveUrlBtn.MouseButton1Click:Connect(function()
     else
         setStatus("URL cannot be empty.", C.red)
     end
+end)
+
+-- ── Test connection button ────────────────────────────────────
+testConnectionBtn.MouseButton1Click:Connect(function()
+    local testUrl = normalizeBackendURL(urlBox.Text or "")
+    if not testUrl then
+        setStatus("Set a valid backend URL before testing.", C.red)
+        return
+    end
+
+    setStatus("Testing backend connection...", C.subtext)
+    local ok, response = pcall(function()
+        return HttpService:RequestAsync({
+            Url = testUrl .. "/health",
+            Method = "GET",
+        })
+    end)
+
+    if not ok then
+        setStatus("Connection test failed: " .. tostring(response):sub(1, 70), C.red)
+        return
+    end
+
+    if not response.Success then
+        setStatus(
+            string.format("Health check failed (%s %s).", tostring(response.StatusCode), tostring(response.StatusMessage)),
+            C.red
+        )
+        return
+    end
+
+    local okJson, payload = pcall(function()
+        return HttpService:JSONDecode(response.Body or "{}")
+    end)
+    if not okJson or type(payload) ~= "table" then
+        setStatus("Health endpoint responded, but body was not valid JSON.", C.orange)
+        return
+    end
+
+    local provider = tostring(payload.provider or "unknown")
+    local model = tostring(payload.model or "unknown")
+    local status = tostring(payload.status or "ok")
+    setStatus(
+        string.format("Connected: %s (%s) via %s", provider, model, status),
+        C.green
+    )
 end)
 
 -- ── Undo button ───────────────────────────────────────────────

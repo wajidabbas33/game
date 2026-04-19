@@ -51,6 +51,47 @@ const {
     normalizeReferenceImages,
     resolveReferenceImages,
 } = require('./image-analyzer');
+const {
+    analysisToOverrides,
+    mergeOverridesIntoLayout,
+    buildAnalysisSummaryCard,
+} = require('./image-to-layout');
+
+// ── Phase 3 modules: Layout engine + quality evaluation ──────
+const {
+    identifyRoomType,
+    layoutToScenePlan,
+    generateArchitecturalShell,
+    generateCustomObjectInstances,
+    getRoomTypeCatalogText,
+    promptRequestsInteriorOnly,
+    promptRequestsExpandedSurroundings,
+} = require('./room-layouts');
+const {
+    evaluateSceneQuality,
+} = require('./quality-evaluator');
+
+// ── Phase 4 modules: Dense props + building generator ────────
+const {
+    autoPopulateSurfaces,
+    menuBoard,
+    storeNameSign,
+    tubeLightFixture,
+    neonAccentStrip,
+    generateFormalOfficeProps,
+    generateCorridorProps,
+} = require('./dense-props');
+const {
+    generateBuilding,
+    generateBuildingRow,
+} = require('./building-generator');
+const {
+    generateTown,
+    generateSociety,
+} = require('./world-generator');
+const {
+    generateHouseBlock,
+} = require('./house-generator');
 
 // ── [B6] Fail-fast environment validation ────────────────────
 // Supports Qwen and OpenAI: at least one API key must be present.
@@ -124,12 +165,54 @@ const aiClient = new OpenAI({
 
 console.log(`🤖  AI Provider: ${ACTIVE_PROVIDER.displayName} → model: ${AI_MODEL}`);
 
+function getVisionRoutingTarget() {
+    const fallbackVisionModel = AI_PROVIDER === 'qwen' ? 'qwen-vl-plus' : 'gpt-4o-mini';
+    const visionModel = process.env.VISION_MODEL || fallbackVisionModel;
+    const visionApiKey = process.env.VISION_API_KEY || ACTIVE_PROVIDER.apiKey;
+    if (!visionApiKey || !visionModel) {
+        return null;
+    }
+
+    const visionBaseURL = process.env.VISION_BASE_URL
+        || ACTIVE_PROVIDER.baseURL
+        || undefined;
+    const visionClient = new OpenAI({
+        apiKey: visionApiKey,
+        ...(visionBaseURL ? { baseURL: visionBaseURL } : {}),
+    });
+
+    return {
+        client: visionClient,
+        provider: ACTIVE_PROVIDER,
+        model: visionModel,
+        routed: true,
+    };
+}
+
+function getGenerationTarget(hasReferenceImages) {
+    const useVisionForGeneration = String(process.env.USE_VISION_FOR_GENERATION || '').toLowerCase() === 'true';
+    if (hasReferenceImages && useVisionForGeneration) {
+        return getVisionRoutingTarget() || {
+            client: aiClient,
+            provider: ACTIVE_PROVIDER,
+            model: AI_MODEL,
+            routed: false,
+        };
+    }
+    return {
+        client: aiClient,
+        provider: ACTIVE_PROVIDER,
+        model: AI_MODEL,
+        routed: false,
+    };
+}
+
 // ── App setup ────────────────────────────────────────────────
 const app    = express();
 const port   = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '8mb' }));
 
 // ── Constants ────────────────────────────────────────────────
 const CONVERSATION_TTL  = 3_600_000;   // 1 hour
@@ -447,6 +530,7 @@ Environment — the surrounding world:
   • Define map boundaries with invisible walls or terrain edges.
   • For floating islands: add underside detail (rock), surrounding water/sky.
   • For ground-level maps: add surrounding terrain, roads leading to edges, background structures.
+  • SCHOOL / CLASSROOM / CAMPUS maps: exterior should be a quiet institutional campus (roads, lawns, trees, school-building shells). Do NOT add vehicles, buses, shops, restaurants, bars, clubs, casinos, airports, hospitals, factories, jungles, animals, humans, or NPCs unless the user explicitly asked for them.
   • Use 10–20 terrain operations and 15–30 instances for environmental detail.
 
 Optional instance parenting:
@@ -1616,7 +1700,387 @@ function buildMapLayoutFallback(prompt) {
 }
 
 function buildDeterministicFallback(prompt) {
+    const text = String(prompt || '').toLowerCase();
+    if (/\b(scene|map|island|terrain|campus|building|classroom|arena|lobby|town|world|layout|architecture|school|interior)\b/.test(text)) {
+        return {
+            explanation: "Created a core map shell for phase 1. Reply 'continue' for phase 2.",
+            complexity: 'complex',
+            phases: [
+                'Phase 1: Build core structure and base layout',
+                'Phase 2: Add gameplay structures and interior/exterior details',
+                'Phase 3: Add exterior environment, boundaries, and polish',
+            ],
+            currentPhase: 1,
+            totalPhases: 3,
+            instances: [
+                { className: 'Model', parent: 'Workspace', properties: { Name: 'MainStructure' } },
+                { className: 'Part', parent: 'MainStructure', properties: { Name: 'MainFloor', Size: [52, 1, 34], Position: [0, 0.5, 0], Color: [212, 212, 205], Anchored: true, Material: 'Concrete' } },
+                { className: 'Part', parent: 'MainStructure', properties: { Name: 'MainRoof', Size: [52, 1, 34], Position: [0, 14.5, 0], Color: [150, 150, 160], Anchored: true, Material: 'Concrete' } },
+                { className: 'Part', parent: 'MainStructure', properties: { Name: 'WallNorth', Size: [52, 14, 1], Position: [0, 7, -17], Color: [236, 236, 236], Anchored: true, Material: 'Concrete' } },
+                { className: 'Part', parent: 'MainStructure', properties: { Name: 'WallSouth', Size: [52, 14, 1], Position: [0, 7, 17], Color: [236, 236, 236], Anchored: true, Material: 'Concrete' } },
+                { className: 'Part', parent: 'MainStructure', properties: { Name: 'WallWest', Size: [1, 14, 34], Position: [-26, 7, 0], Color: [236, 236, 236], Anchored: true, Material: 'Concrete' } },
+                { className: 'Part', parent: 'MainStructure', properties: { Name: 'WallEast', Size: [1, 14, 34], Position: [26, 7, 0], Color: [236, 236, 236], Anchored: true, Material: 'Concrete' } },
+                { className: 'Part', parent: 'MainStructure', properties: { Name: 'MainEntrance', Size: [4, 7, 0.4], Position: [0, 3.5, 17.3], Color: [102, 74, 48], Anchored: true, Material: 'Wood' } },
+                { className: 'Part', parent: 'Workspace', properties: { Name: 'PrimarySpawn', Size: [8, 1, 8], Position: [0, 1, 24], Color: [103, 192, 128], Anchored: true, Material: 'SmoothPlastic' } },
+            ],
+            terrain: [],
+            scripts: [],
+        };
+    }
     return buildTerrainFallback(prompt) || buildMapLayoutFallback(prompt);
+}
+
+function buildDeterministicScenePlan(prompt) {
+    const text = String(prompt || '').toLowerCase();
+    const isIsland = /\b(island|floating)\b/.test(text);
+    const isSchoolLike = /\b(class|classroom|school|academy|campus)\b/.test(text);
+    const wantsExpandedSchoolWorld = /\b(campus|grounds|parking|road|street|outside|outdoor|exterior|courtyard)\b/.test(text);
+    const isCTF = /\b(capture the flag|ctf|flag)\b/.test(text);
+    const isSurvival = /\b(survival|wave|waves|zombie|enemy)\b/.test(text);
+    const isArena = /\b(arena|pvp|battle|combat)\b/.test(text);
+    const sceneType = isIsland ? 'floating_island' : (isSchoolLike ? 'classroom' : 'custom');
+    const dims = isIsland ? { width: 180, depth: 180, height: 48 } : { width: 140, depth: 140, height: 40 };
+    const boundaryType = isIsland ? 'water_border' : 'terrain_fade';
+
+    const objects = [
+        { type: 'custom', name: 'MainStructure', className: 'Model', description: 'Primary playable structure centered in map', position: [0, 0, 0], size: [52, 16, 36], material: 'Concrete', color: [220, 220, 220] },
+        { template: 'stone_path', count: 4, zone: 'core_play_area', spacing: 'line', notes: 'Connect center structure to edges' },
+        { template: 'deciduous_tree_medium', count: 8, zone: 'outer_environment', spacing: 'scattered', notes: 'Keep away from core playable structure' },
+        { template: 'street_lamp', count: 4, zone: 'outer_environment', spacing: 'along_path', notes: 'Perimeter lighting' },
+    ];
+
+    if (isSchoolLike) {
+        objects.push(
+            { template: 'desk', count: 8, zone: 'core_play_area', spacing: 'grid', notes: 'Interior classroom layout' },
+            { template: 'chair', count: 8, zone: 'core_play_area', spacing: 'grid', notes: 'Pair with desks' }
+        );
+    }
+    if (isCTF) {
+        objects.push(
+            { type: 'custom', name: 'RedBase', className: 'Model', description: 'Red team base platform', position: [-32, 0, 0], size: [18, 3, 18], material: 'Concrete', color: [205, 88, 88] },
+            { type: 'custom', name: 'BlueBase', className: 'Model', description: 'Blue team base platform', position: [32, 0, 0], size: [18, 3, 18], material: 'Concrete', color: [95, 162, 255] },
+            { type: 'custom', name: 'CenterObjective', className: 'Model', description: 'Center objective marker', position: [0, 0, 0], size: [8, 6, 8], material: 'Metal', color: [230, 210, 80] }
+        );
+    }
+    if (isSurvival) {
+        objects.push(
+            { type: 'custom', name: 'DefenseZone', className: 'Model', description: 'Player defense zone', position: [0, 0, 0], size: [24, 2, 24], material: 'Concrete', color: [180, 180, 180] },
+            { type: 'custom', name: 'EnemySpawnRing', className: 'Model', description: 'Spawn ring around play area', position: [0, 0, 0], size: [120, 2, 120], material: 'Ground', color: [120, 115, 105] }
+        );
+    }
+    if (isArena && !isCTF) {
+        objects.push(
+            { type: 'custom', name: 'ArenaCenter', className: 'Model', description: 'Central arena combat zone', position: [0, 0, 0], size: [28, 2, 28], material: 'Concrete', color: [170, 170, 176] },
+            { template: 'rock_formation', count: 4, zone: 'core_play_area', spacing: 'scattered', notes: 'Cover objects for combat flow' }
+        );
+    }
+
+    return {
+        sceneType,
+        title: isSchoolLike ? 'Deterministic School Map Plan' : 'Deterministic Game Map Plan',
+        dimensions: dims,
+        groundLevel: 0,
+        zones: [
+            {
+                name: 'core_play_area',
+                purpose: 'Main playable structure and immediate interaction area',
+                bounds: { minX: -36, maxX: 36, minZ: -30, maxZ: 30 },
+                elevation: 0,
+                terrainMaterial: isSchoolLike ? 'SmoothPlastic' : 'Grass',
+            },
+            {
+                name: 'outer_environment',
+                purpose: 'Surroundings, paths, props, and boundary transition',
+                bounds: { minX: -80, maxX: 80, minZ: -80, maxZ: 80 },
+                elevation: 0,
+                terrainMaterial: 'Grass',
+            },
+        ],
+        objects,
+        lighting: {
+            timeOfDay: 'golden_hour',
+            ambience: 'warm',
+            fogDensity: 'light',
+            pointLightCount: 4,
+            pointLightColor: [255, 220, 140],
+        },
+        environment: {
+            generateSurroundings: true,
+            expandedWorld: wantsExpandedSchoolWorld,
+            interiorOnly: false,
+            skipTerrainOperations: isSchoolLike && !wantsExpandedSchoolWorld,
+            schoolCampusExterior: isSchoolLike,
+            boundaryType,
+            surroundingTerrain: isSchoolLike && !wantsExpandedSchoolWorld ? 'Ground' : 'Grass',
+            surroundingElements: isSchoolLike && !wantsExpandedSchoolWorld
+                ? ['roads', 'background_structures', 'lamps', 'trees_sparse']
+                : ['trees_sparse', 'roads', 'benches', 'background_structures', 'rocks_scattered'],
+            mapBoundarySize: {
+                width: dims.width * (isSchoolLike && wantsExpandedSchoolWorld ? 1.5 : 1.65),
+                depth: dims.depth * (isSchoolLike && wantsExpandedSchoolWorld ? 1.5 : 1.65),
+            },
+        },
+        colorPalette: {
+            primary: [82, 158, 58],
+            secondary: [148, 148, 140],
+            accent: [255, 220, 140],
+            style: 'modern_clean',
+        },
+    };
+}
+
+function buildDeterministicBoundaryInstances(scenePlan) {
+    const env = scenePlan?.environment || {};
+    const dims = scenePlan?.dimensions || { width: 128, depth: 128 };
+    const mapWidth = env.mapBoundarySize?.width || dims.width * 1.6;
+    const mapDepth = env.mapBoundarySize?.depth || dims.depth * 1.6;
+    const halfW = mapWidth / 2;
+    const halfD = mapDepth / 2;
+    const wallHeight = 22;
+    const boundaryType = env.boundaryType || 'invisible_walls';
+    const makeWall = (name, size, pos) => ({
+        className: 'Part',
+        parent: 'Workspace',
+        properties: {
+            Name: name,
+            Size: size,
+            Position: pos,
+            Anchored: true,
+            CanCollide: true,
+            // Fully invisible boundaries read as "missing" geometry in Studio (wireframe only).
+            Transparency: 0.86,
+            Color: [202, 205, 212],
+            Material: 'SmoothPlastic',
+            CastShadow: false,
+        },
+    });
+
+    if (boundaryType === 'water_border') {
+        return [
+            makeWall('WaterBoundN', [mapWidth + 20, wallHeight, 2], [0, wallHeight / 2, -halfD - 10]),
+            makeWall('WaterBoundS', [mapWidth + 20, wallHeight, 2], [0, wallHeight / 2, halfD + 10]),
+            makeWall('WaterBoundW', [2, wallHeight, mapDepth + 20], [-halfW - 10, wallHeight / 2, 0]),
+            makeWall('WaterBoundE', [2, wallHeight, mapDepth + 20], [halfW + 10, wallHeight / 2, 0]),
+        ];
+    }
+
+    return [
+        makeWall('BoundaryNorth', [mapWidth, wallHeight, 2], [0, wallHeight / 2, -halfD]),
+        makeWall('BoundarySouth', [mapWidth, wallHeight, 2], [0, wallHeight / 2, halfD]),
+        makeWall('BoundaryWest', [2, wallHeight, mapDepth], [-halfW, wallHeight / 2, 0]),
+        makeWall('BoundaryEast', [2, wallHeight, mapDepth], [halfW, wallHeight / 2, 0]),
+    ];
+}
+
+function isSceneLikePrompt(prompt) {
+    const text = String(prompt || '').toLowerCase();
+    return /\b(scene|map|island|terrain|campus|building|classroom|arena|lobby|town|world|layout|architecture|outdoor|exterior|neighborhood|village|city|street)\b/.test(text);
+}
+
+/**
+ * Returns true for any prompt describing an outdoor / exterior world.
+ * Used to always trigger the full society generator.
+ */
+function isExteriorPrompt(prompt) {
+    const text = String(prompt || '').toLowerCase();
+    return /\b(town|city|neighborhood|neighbourhood|village|suburb|residential|street|outdoor|exterior|open world|game world|game map|map|world|society|estate|campus|plaza|theme park|park|district)\b/.test(text);
+}
+
+function inferRequestedPhase(prompt, session) {
+    if (!session?.lastResponse) {
+        return 1;
+    }
+    if (isContinuePrompt(prompt)) {
+        return Math.min(
+            (session.lastResponse.currentPhase || 1) + 1,
+            session.lastResponse.totalPhases || 1
+        );
+    }
+    return session.lastResponse.currentPhase || 1;
+}
+
+function buildPhaseExecutionSystemMessage(prompt, session) {
+    if (!isSceneLikePrompt(prompt)) {
+        return null;
+    }
+
+    const phase = inferRequestedPhase(prompt, session);
+    if (phase <= 1) {
+        return [
+            'PHASE 1 EXECUTION RULES (MANDATORY):',
+            '1) Create a coherent core structure first (floor + walls + roof + entrance) and keep it centered.',
+            '2) Include at least one named root model for the primary build.',
+            '3) Do not return terrain-only or decor-only output for phase 1.',
+            '4) Keep environment light in phase 1; prioritize architecture and primary layout anchors.',
+        ].join(' ');
+    }
+    if (phase === 2) {
+        return [
+            'PHASE 2 EXECUTION RULES (MANDATORY):',
+            '1) Expand and detail the primary structure created in phase 1 (interior objects, gameplay-relevant layout pieces).',
+            '2) Add connected structures/paths and playable navigation flow, not random scattered props.',
+            '3) Preserve phase-1 anchors and names where possible; avoid replacing the entire map shell.',
+            '4) Include meaningful object density for the core play area.',
+        ].join(' ');
+    }
+    return [
+        'PHASE 3 EXECUTION RULES (MANDATORY):',
+        '1) Finalize world composition around the main build (surrounding terrain, roads/paths, props, background structures).',
+        '2) Ensure explicit map boundaries for a complete playable area.',
+        '3) Add polish and consistency (lighting/environment coherence) without breaking prior phases.',
+        '4) Output should feel complete and game-ready, not an isolated build on empty baseplate.',
+    ].join(' ');
+}
+
+function countStructuralInstances(instances) {
+    if (!Array.isArray(instances)) {
+        return 0;
+    }
+    const structuralNamePattern = /(mainbuilding|building|class(room)?|school|room|hall|lobby|arena|base|house|tower|office|wall|roof|floor|door|window)/i;
+    return instances.reduce((count, inst) => {
+        const name = String(inst?.properties?.Name || '');
+        const cls = String(inst?.className || '');
+        const isRoadLike = /(road|path|lamp|bench|tree|flower|rock|pond|boundary)/i.test(name);
+        if (structuralNamePattern.test(name) && !isRoadLike) {
+            return count + 1;
+        }
+        return count;
+    }, 0);
+}
+
+function hasClosedShell(instances) {
+    if (!Array.isArray(instances) || instances.length === 0) {
+        return false;
+    }
+    const names = new Set(
+        instances
+            .map(inst => String(inst?.properties?.Name || '').toLowerCase())
+            .filter(Boolean)
+    );
+    const hasFloor = [...names].some(name => /floor/.test(name));
+    const hasRoof = [...names].some(name => /roof/.test(name));
+    const wallCount = [...names].filter(name => /wall/.test(name)).length;
+    return hasFloor && hasRoof && wallCount >= 2;
+}
+
+function hasExistingLayoutShell(instances) {
+    if (!Array.isArray(instances)) {
+        return false;
+    }
+    const names = instances
+        .map(inst => String(inst?.properties?.Name || '').toLowerCase())
+        .filter(Boolean);
+    const hasArenaShell = names.some(name => /(arenafloor|northwall|southwall|eastwall|westwall|arena)/.test(name));
+    const hasClassShell = names.some(name => /(classroomfloor|classroomroof|wallnorth|wallsouth|wallwest|walleast|schoolbuilding|mainbuilding)/.test(name));
+    return hasArenaShell || hasClassShell;
+}
+
+function countEnvironmentSignals(instances, terrain) {
+    let score = 0;
+    if (Array.isArray(instances)) {
+        for (const inst of instances) {
+            const name = String(inst?.properties?.Name || '').toLowerCase();
+            if (/(road|path|campusdrive|tree|rock|flower|bench|lamp|boundary|waterbound|bgbuilding|schoolwing)/.test(name)) {
+                score += 1;
+            }
+        }
+    }
+    if (Array.isArray(terrain)) {
+        for (const op of terrain) {
+            const material = String(op?.material || '').toLowerCase();
+            if (/(grass|ground|rock|water|sand|mud|snow)/.test(material)) {
+                score += 1;
+            }
+        }
+    }
+    return score;
+}
+
+function buildCoreStructureFallback(scenePlan) {
+    const dims = scenePlan?.dimensions || { width: 128, depth: 128 };
+    const groundLevel = scenePlan?.groundLevel || 0;
+    const buildW = Math.max(26, Math.min(64, Math.round(dims.width * 0.28)));
+    const buildD = Math.max(20, Math.min(52, Math.round(dims.depth * 0.24)));
+    const wallH = 14;
+    const wallT = 1;
+    const cx = 0;
+    const cz = 0;
+
+    return [
+        { className: 'Model', parent: 'Workspace', properties: { Name: 'MainBuilding' } },
+        {
+            className: 'Part',
+            parent: 'MainBuilding',
+            properties: {
+                Name: 'MainFloor',
+                Size: [buildW, 1, buildD],
+                Position: [cx, groundLevel + 0.5, cz],
+                Color: [205, 205, 198],
+                Anchored: true,
+                Material: 'Concrete',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'MainBuilding',
+            properties: {
+                Name: 'Roof',
+                Size: [buildW, 1, buildD],
+                Position: [cx, groundLevel + wallH + 0.5, cz],
+                Color: [160, 160, 168],
+                Anchored: true,
+                Material: 'Concrete',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'MainBuilding',
+            properties: {
+                Name: 'WallNorth',
+                Size: [buildW, wallH, wallT],
+                Position: [cx, groundLevel + wallH / 2, cz - buildD / 2],
+                Color: [235, 235, 235],
+                Anchored: true,
+                Material: 'Concrete',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'MainBuilding',
+            properties: {
+                Name: 'WallSouth',
+                Size: [buildW, wallH, wallT],
+                Position: [cx, groundLevel + wallH / 2, cz + buildD / 2],
+                Color: [235, 235, 235],
+                Anchored: true,
+                Material: 'Concrete',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'MainBuilding',
+            properties: {
+                Name: 'WallWest',
+                Size: [wallT, wallH, buildD],
+                Position: [cx - buildW / 2, groundLevel + wallH / 2, cz],
+                Color: [232, 232, 232],
+                Anchored: true,
+                Material: 'Concrete',
+            },
+        },
+        {
+            className: 'Part',
+            parent: 'MainBuilding',
+            properties: {
+                Name: 'WallEast',
+                Size: [wallT, wallH, buildD],
+                Position: [cx + buildW / 2, groundLevel + wallH / 2, cz],
+                Color: [232, 232, 232],
+                Anchored: true,
+                Material: 'Concrete',
+            },
+        },
+    ];
 }
 
 function shouldUseDeterministicLayoutPreview(prompt) {
@@ -1640,14 +2104,14 @@ function withTimeout(promise, timeoutMs, code = 'AI_TIMEOUT') {
     ]);
 }
 
-function buildCompletionRequest(messages, options = {}) {
+function buildCompletionRequest(messages, target, options = {}) {
     const request = {
-        model: AI_MODEL,
-        temperature: ACTIVE_PROVIDER.temperature,
+        model: target.model,
+        temperature: target.provider.temperature,
         messages,
     };
 
-    request[ACTIVE_PROVIDER.maxTokenField] = options.maxTokens || 1000;
+    request[target.provider.maxTokenField] = options.maxTokens || 1000;
 
     if (AI_PROVIDER === 'openai') {
         request.response_format = { type: 'json_object' };
@@ -1814,7 +2278,7 @@ function normalizeParsedResponseShape(data) {
     return normalized;
 }
 
-async function repairStructuredResponse({ prompt, rawText, performanceSystemMessage, validationErrors }) {
+async function repairStructuredResponse({ prompt, rawText, performanceSystemMessage, validationErrors, target }) {
     const repairMessages = [
         { role: 'system', content: FAST_SYSTEM_PROMPT },
         {
@@ -1856,7 +2320,7 @@ async function repairStructuredResponse({ prompt, rawText, performanceSystemMess
 
     const repairCompletion = await withTimeout(
         retryWithBackoff(() =>
-            aiClient.chat.completions.create(buildCompletionRequest(repairMessages, {
+            target.client.chat.completions.create(buildCompletionRequest(repairMessages, target, {
                 maxTokens: Math.max(900, Math.min(1400, estimateMaxTokens(prompt))),
             }))
         ),
@@ -1906,7 +2370,9 @@ async function retryWithBackoff(fn, maxRetries = 3, baseDelay = 1000) {
 // ── POST /generate ───────────────────────────────────────────
 app.post('/generate', apiLimiter, async (req, res) => {
     const { prompt, conversationId, mode, generateEnv, imageUrls, referenceImages } = req.body;
-    const generationMode = (mode === 'detailed') ? 'detailed' : 'quick';
+    const requestedMode = (mode === 'detailed') ? 'detailed' : 'quick';
+    const requestId = Math.random().toString(36).slice(2, 8);
+    const startedAt = Date.now();
 
     // Input validation — before touching any state
     if (!prompt || typeof prompt !== 'string' || prompt.trim() === '') {
@@ -1938,6 +2404,29 @@ app.post('/generate', apiLimiter, async (req, res) => {
     };
     session.lastAccessed = Date.now();
 
+    const normalizedReferenceResult = normalizeReferenceImages(referenceImages, imageUrls);
+    const normalizedReferenceImages = normalizedReferenceResult.images;
+    const generationTarget = getGenerationTarget(normalizedReferenceImages.length > 0);
+    const sceneQualityKeywords = /\b(scene|layout|map|campus|classroom|class|school|academy|arena|lobby|town|island|terrain|environment|surroundings|architecture|building|world|cafe|café|coffee|restaurant|shop|store|retail|office|meeting|conference|foyer|reception|apartment|bedroom|kitchen|bathroom|corridor|hallway|living room|interior|indoor|inside|room)\b/i;
+    // Also upgrade to detailed mode whenever a known room-type preset matches the prompt.
+    const promptMatchesRoomPreset = !!identifyRoomType(prompt);
+    const shouldForceDetailed = requestedMode === 'quick' && (
+        sceneQualityKeywords.test(prompt)
+        || promptMatchesRoomPreset
+        || normalizedReferenceImages.length > 0
+    );
+    const generationMode = shouldForceDetailed ? 'detailed' : requestedMode;
+    const modeReason = shouldForceDetailed
+        ? (normalizedReferenceImages.length > 0 ? 'reference_images' : 'scene_prompt')
+        : 'requested';
+
+    console.log(
+        `[${requestId}] /generate mode=${requestedMode}->${generationMode} reason=${modeReason} refs=${normalizedReferenceImages.length} generateEnv=${generateEnv !== false}`
+    );
+    console.log(
+        `[${requestId}] model-route=${generationTarget.model}${generationTarget.routed ? ' (vision-routed)' : ''}`
+    );
+
     const userMessage = buildUserMessage(prompt, session);
     const historyLengthBeforeTurn = session.messages.length;
 
@@ -1951,51 +2440,102 @@ app.post('/generate', apiLimiter, async (req, res) => {
 
     try {
         const performanceSystemMessage = buildPerformanceSystemMessage(prompt, session);
+        const phaseExecutionSystemMessage = buildPhaseExecutionSystemMessage(prompt, session);
 
         // ── Image analysis (if reference images were provided) ─
         let imageContext = '';
         const imageWarnings = [];
-        const normalizedReferenceResult = normalizeReferenceImages(referenceImages, imageUrls);
-        const normalizedReferenceImages = normalizedReferenceResult.images;
+        let imageAnalysisState = 'not_requested';
+        let imageLayoutOverrides = null;    // image-to-layout override bundle
+        let imageAnalysisSummaryCard = null; // for plugin UI preview
+
         if (normalizedReferenceResult.warnings.length > 0) {
             imageWarnings.push(...normalizedReferenceResult.warnings);
         }
 
         if (normalizedReferenceImages.length > 0) {
             try {
-                if (!process.env.VISION_MODEL) {
-                    imageWarnings.push(
-                        'Reference images were provided, but VISION_MODEL is not configured in .env. Image analysis was skipped.'
-                    );
-                } else {
-                    const resolvedReferenceResult = await resolveReferenceImages(normalizedReferenceImages);
-                    if (resolvedReferenceResult.warnings.length > 0) {
-                        imageWarnings.push(...resolvedReferenceResult.warnings);
-                    }
+                const resolvedReferenceResult = await resolveReferenceImages(normalizedReferenceImages);
+                if (resolvedReferenceResult.warnings.length > 0) {
+                    imageWarnings.push(...resolvedReferenceResult.warnings);
+                }
 
-                    if (resolvedReferenceResult.images.length > 0) {
-                        const imageAnalysis = await analyzeReferenceImages(resolvedReferenceResult.images, prompt);
-                        if (imageAnalysis) {
-                            imageContext = imageAnalysisToContext(imageAnalysis);
-                            console.log('📷 Image analysis injected into prompt context');
-                        } else {
-                            imageWarnings.push('Reference images were resolved, but the vision model did not return usable analysis.');
+                if (resolvedReferenceResult.images.length > 0) {
+                    const imageAnalysis = await analyzeReferenceImages(resolvedReferenceResult.images, prompt);
+                    if (imageAnalysis) {
+                        // 1. Build planner context text (used in AI prompt)
+                        imageContext = imageAnalysisToContext(imageAnalysis);
+
+                        // 2. Convert to deterministic overrides (NEW)
+                        imageLayoutOverrides = analysisToOverrides(imageAnalysis, prompt);
+
+                        // 3. Build summary card for plugin UI (NEW)
+                        imageAnalysisSummaryCard = buildAnalysisSummaryCard(imageAnalysis, imageLayoutOverrides);
+
+                        imageAnalysisState = 'used';
+                        console.log(`[${requestId}] 📷 Image analysis complete — model=qwen-vl-max detail=high`);
+                        console.log(`[${requestId}]    detected roomType: ${imageLayoutOverrides.detectedRoomType} confidence: ${imageLayoutOverrides.confidence}`);
+                        if (imageAnalysisSummaryCard?.specialFlags?.length > 0) {
+                            console.log(`[${requestId}]    special flags: ${imageAnalysisSummaryCard.specialFlags.join(', ')}`);
                         }
                     } else {
-                        imageWarnings.push('No valid reference images could be resolved for analysis.');
+                        imageAnalysisState = 'skipped_or_empty';
+                        imageWarnings.push('Reference images were resolved, but the vision model did not return usable analysis.');
                     }
+                } else {
+                    imageAnalysisState = 'no_resolved_images';
+                    imageWarnings.push('No valid reference images could be resolved for analysis.');
                 }
             } catch (imgErr) {
+                imageAnalysisState = 'failed';
                 imageWarnings.push('Failed to analyze reference images: ' + imgErr.message);
                 console.warn('⚠️  Image analysis failed:', imgErr.message);
             }
+        } else {
+            imageAnalysisState = 'no_reference_images';
         }
+        console.log(`[${requestId}] image-analysis=${imageAnalysisState}`);
 
         // ── Two-pass pipeline (Detailed mode) ───────────────
         let scenePlan = null;
         let scenePlanText = null;
+        let usedDeterministicScenePlan = false;
+        let detectedRoomType = null;
+        let roomLayout = null;
 
         if (generationMode === 'detailed' && !isContinuePrompt(prompt) && !isContextualFollowUpPrompt(prompt, session)) {
+            // ── Room layout engine: check for known room types ──
+            // If image analysis detected a room type with >= 0.55 confidence, use it
+            let roomMatch = null;
+            if (imageLayoutOverrides?.detectedRoomType && imageLayoutOverrides.confidence >= 0.55) {
+                const { identifyRoomType: irt } = require('./room-layouts');
+                roomMatch = irt(imageLayoutOverrides.detectedRoomType);
+                if (roomMatch) {
+                    console.log(`📷 Image overrides room type: ${roomMatch.key} (confidence ${imageLayoutOverrides.confidence})`);
+                }
+            }
+            // Fall back to prompt-based detection
+            if (!roomMatch) {
+                roomMatch = identifyRoomType(prompt);
+            }
+
+            if (roomMatch) {
+                detectedRoomType = roomMatch.key;
+                roomLayout = roomMatch.layout;
+
+                // ── Apply image-derived overrides onto the layout ──────
+                if (imageLayoutOverrides?.hasImageOverrides) {
+                    roomLayout = mergeOverridesIntoLayout(roomLayout, imageLayoutOverrides);
+                    console.log(`📐 Image overrides merged into layout (dims, walls, lighting, special flags)`);
+                }
+
+                scenePlan = layoutToScenePlan(detectedRoomType, roomLayout, prompt);
+                scenePlanText = JSON.stringify(scenePlan, null, 2);
+                console.log(`🏗️  Room layout engine matched: "${detectedRoomType}" — ${roomLayout.zones.length} zones, ${scenePlan.objects.length} planned objects`);
+            }
+
+            // ── AI scene planner (if no room layout match) ───────
+            if (!scenePlan) {
             console.log('🔬 Detailed mode: running scene planner...');
             const plannerMessages = [
                 { role: 'system', content: SCENE_PLANNER_PROMPT },
@@ -2008,11 +2548,11 @@ app.post('/generate', apiLimiter, async (req, res) => {
             try {
                 const planCompletion = await withTimeout(
                     retryWithBackoff(() =>
-                        aiClient.chat.completions.create(buildCompletionRequest(plannerMessages, {
+                        generationTarget.client.chat.completions.create(buildCompletionRequest(plannerMessages, generationTarget, {
                             maxTokens: 1200,
                         }))
                     ),
-                    20_000,
+                    15_000,
                     'PLANNER_TIMEOUT'
                 );
                 const planRaw = getCompletionText(planCompletion.choices[0].message || {});
@@ -2025,13 +2565,56 @@ app.post('/generate', apiLimiter, async (req, res) => {
                     scenePlanText = JSON.stringify(scenePlan, null, 2);
                     console.log('✅ Scene plan generated:', scenePlan.title || scenePlan.sceneType);
                 } catch (planParseErr) {
-                    console.warn('⚠️  Scene planner returned unparseable JSON, falling back to single-pass');
-                    scenePlan = null;
+                    console.warn('⚠️  Scene planner returned unparseable JSON, attempting repair pass...');
+                    try {
+                        const plannerRepairMessages = [
+                            ...plannerMessages,
+                            { role: 'assistant', content: String(planRaw || '').slice(0, 10_000) },
+                            {
+                                role: 'user',
+                                content: 'Rewrite your previous answer as strict ScenePlan JSON only. No prose, no markdown, no code fences.',
+                            },
+                        ];
+                        const repairCompletion = await withTimeout(
+                            retryWithBackoff(() =>
+                                generationTarget.client.chat.completions.create(buildCompletionRequest(plannerRepairMessages, generationTarget, {
+                                    maxTokens: 1200,
+                                }))
+                            ),
+                            30_000,
+                            'PLANNER_REPAIR_TIMEOUT'
+                        );
+                        const repairRaw = getCompletionText(repairCompletion.choices[0].message || {});
+                        scenePlan = parseJsonResponse(repairRaw);
+                        const repairedValidation = validateScenePlan(scenePlan);
+                        if (repairedValidation.warnings.length > 0) {
+                            console.warn('Scene plan warnings (repair):', repairedValidation.warnings);
+                        }
+                        scenePlanText = JSON.stringify(scenePlan, null, 2);
+                        console.log('✅ Scene plan repaired:', scenePlan.title || scenePlan.sceneType);
+                    } catch (planRepairErr) {
+                        console.warn('⚠️  Scene planner repair failed, using deterministic ScenePlan fallback:', planRepairErr.message);
+                        if (isSceneLikePrompt(prompt)) {
+                            scenePlan = buildDeterministicScenePlan(prompt);
+                            scenePlanText = JSON.stringify(scenePlan, null, 2);
+                            console.log('✅ Deterministic ScenePlan fallback injected');
+                        } else {
+                            scenePlan = null;
+                        }
+                    }
                 }
             } catch (planErr) {
-                console.warn('⚠️  Scene planner failed, falling back to single-pass:', planErr.message);
-                scenePlan = null;
+                console.warn('⚠️  Scene planner failed, using deterministic ScenePlan fallback:', planErr.message);
+                if (isSceneLikePrompt(prompt)) {
+                    scenePlan = buildDeterministicScenePlan(prompt);
+                    scenePlanText = JSON.stringify(scenePlan, null, 2);
+                    usedDeterministicScenePlan = true;
+                    console.log('✅ Deterministic ScenePlan fallback injected');
+                } else {
+                    scenePlan = null;
+                }
             }
+            } // end if (!scenePlan)
         }
 
         // ── Build main AI messages ───────────────────────────
@@ -2055,24 +2638,50 @@ app.post('/generate', apiLimiter, async (req, res) => {
         if (performanceSystemMessage) {
             messages.push({ role: 'system', content: performanceSystemMessage });
         }
+        if (phaseExecutionSystemMessage) {
+            messages.push({ role: 'system', content: phaseExecutionSystemMessage });
+        }
 
         messages.push(...session.messages);
 
         let rawText = '';
         let parsed = null;
 
-        if (shouldUseDeterministicLayoutPreview(prompt)) {
+        if (usedDeterministicScenePlan && isSceneLikePrompt(prompt)) {
+            const forcedPhase = Math.max(1, Math.min(3, inferRequestedPhase(prompt, session)));
+            parsed = {
+                explanation: forcedPhase === 1
+                    ? "Created the core map shell for phase 1. Reply 'continue' for phase 2."
+                    : (forcedPhase === 2
+                        ? "Expanded gameplay structures and details for phase 2. Reply 'continue' for phase 3."
+                        : 'Finalized world composition and boundaries for phase 3.'),
+                complexity: 'complex',
+                phases: [
+                    'Phase 1: Build core structure and base layout',
+                    'Phase 2: Add gameplay structures and interior/exterior details',
+                    'Phase 3: Add exterior environment, boundaries, and polish',
+                ],
+                currentPhase: forcedPhase,
+                totalPhases: 3,
+                instances: [],
+                terrain: [],
+                scripts: [],
+            };
+            console.log(`[${requestId}] skipped long builder call and used deterministic phase scaffold (phase ${forcedPhase})`);
+        }
+
+        if (!parsed && shouldUseDeterministicLayoutPreview(prompt)) {
             parsed = buildMapLayoutFallback(prompt);
             console.warn('Used deterministic layout preview shortcut.');
-        } else if (shouldUseDeterministicTerrainPreview(prompt)) {
+        } else if (!parsed && shouldUseDeterministicTerrainPreview(prompt)) {
             parsed = buildTerrainFallback(prompt);
             console.warn('Used deterministic terrain preview shortcut.');
-        } else {
+        } else if (!parsed) {
             let completion;
             try {
                 completion = await withTimeout(
                     retryWithBackoff(() =>
-                        aiClient.chat.completions.create(buildCompletionRequest(messages, {
+                        generationTarget.client.chat.completions.create(buildCompletionRequest(messages, generationTarget, {
                             maxTokens: estimateMaxTokens(prompt, session, generationMode),
                         }))
                     ),
@@ -2103,6 +2712,7 @@ app.post('/generate', apiLimiter, async (req, res) => {
                             prompt,
                             rawText,
                             performanceSystemMessage,
+                            target: generationTarget,
                         });
                         console.warn('Recovered invalid JSON response with repair pass.');
                     } catch (_) {
@@ -2138,6 +2748,7 @@ app.post('/generate', apiLimiter, async (req, res) => {
                     rawText,
                     performanceSystemMessage,
                     validationErrors: validation.errors,
+                    target: generationTarget,
                 });
                 parsed = normalizeParsedResponseShape(parsed);
                 validation = validateResponseStructure(parsed);
@@ -2225,6 +2836,11 @@ app.post('/generate', apiLimiter, async (req, res) => {
 
         // ── Merge template-resolved objects (Detailed mode) ─
         if (scenePlan) {
+            // Classroom from room-layout engine: AI Part spam duplicates the shell and stacks desks.
+            if (detectedRoomType === 'classroom' && roomLayout && Array.isArray(safe.instances) && safe.instances.length > 0) {
+                console.log(`🏫 Classroom preset: discarding ${safe.instances.length} AI instance(s); using layout shell + templates only`);
+                safe.instances = [];
+            }
             try {
                 const templateResult = resolveScenePlanTemplates(scenePlan);
                 if (templateResult.instances.length > 0 || templateResult.terrain.length > 0) {
@@ -2237,17 +2853,208 @@ app.post('/generate', apiLimiter, async (req, res) => {
             }
         }
 
+        // ── Architectural shell from room layout engine ──────
+        if (roomLayout && scenePlan) {
+            try {
+                const shellResult = generateArchitecturalShell(roomLayout, scenePlan);
+                if (shellResult.instances.length > 0) {
+                    // Prepend shell (floor/walls/ceiling) before furniture so hierarchy is clean
+                    safe.instances = [...shellResult.instances, ...(safe.instances || [])];
+                    console.log(`🏠 Generated architectural shell: ${shellResult.instances.length} parts (${detectedRoomType})`);
+                }
+
+                // Render fully-specified custom objects (whiteboard, teacher desk, etc.)
+                // — these were being silently dropped by the template resolver.
+                const customObjResult = generateCustomObjectInstances(scenePlan, 'MainBuilding');
+                if (customObjResult.instances.length > 0) {
+                    safe.instances = [...(safe.instances || []), ...customObjResult.instances];
+                    console.log(`🪧 Rendered ${customObjResult.instances.length} custom interior objects (whiteboard, teacher desk, etc.)`);
+                }
+            } catch (shellErr) {
+                console.warn('⚠️  Architectural shell generation failed:', shellErr.message);
+            }
+        }
+        // ── Dense prop auto-population ─────────────────────────
+        // Scans all generated surfaces and scatters small-object clutter
+        if (detectedRoomType && safe.instances && safe.instances.length > 0) {
+            try {
+                const surfaceProps = autoPopulateSurfaces(safe.instances, detectedRoomType);
+                if (surfaceProps.instances.length > 0) {
+                    safe.instances = [...(safe.instances || []), ...surfaceProps.instances];
+                    console.log(`🍽️  Dense props: added ${surfaceProps.instances.length} surface clutter parts (${detectedRoomType})`);
+                }
+            } catch (propErr) {
+                console.warn('⚠️  Dense prop generation failed:', propErr.message);
+            }
+        }
+
+        // ── Formal office special props ─────────────────────────
+        // Columns, fireplace, drapes, rug, portraits, busts
+        if (detectedRoomType === 'formal_office' && roomLayout) {
+            try {
+                const { width: fw, depth: fd, height: fh } = roomLayout.defaultDims;
+                const officeProps = generateFormalOfficeProps(fw, fd, fh, roomLayout.specialFlags);
+                if (officeProps.instances.length > 0) {
+                    safe.instances = [...(safe.instances || []), ...officeProps.instances];
+                    console.log(`🏛️  Formal office props: ${officeProps.instances.length} parts (columns, fireplace, drapes, rug)`);
+                }
+            } catch (fErr) {
+                console.warn('⚠️  Formal office props failed:', fErr.message);
+            }
+        }
+
+        // ── Corridor special props ─────────────────────────────
+        // Wall panels, ceiling grid, hedge planters, column supports
+        if (detectedRoomType === 'corridor' && roomLayout) {
+            try {
+                const { width: cw, depth: cd, height: ch } = roomLayout.defaultDims;
+                const corridorProps = generateCorridorProps(cw, cd, ch);
+                if (corridorProps.instances.length > 0) {
+                    safe.instances = [...(safe.instances || []), ...corridorProps.instances];
+                    console.log(`🚀 Corridor props: ${corridorProps.instances.length} parts (panels, grid, planters)`);
+                }
+            } catch (cErr) {
+                console.warn('⚠️  Corridor props failed:', cErr.message);
+            }
+        }
+
+        // ── Society / Town exterior world generation ─────────────
+        // Always generates a FULL SOCIETY (police, school, hospital, fire station,
+        // park, commercial strip, residential houses) for any exterior prompt.
+        const _isTownType = detectedRoomType === 'town_exterior' && roomLayout?.specialFlags?.isExteriorWorld;
+        const _isExteriorScene = !detectedRoomType && isExteriorPrompt(prompt);
+        const promptLower = String(prompt || '').toLowerCase();
+        const isSchoolFocusedPrompt = /\b(school|classroom|class\b|academy|campus)\b/.test(promptLower);
+        if ((_isTownType || _isExteriorScene) && !isSchoolFocusedPrompt) {
+            try {
+                const society = generateSociety({
+                    size: 300,
+                    groundLevel: scenePlan?.groundLevel || 0,
+                    detailLevel: 'medium',
+                });
+                // Society completely replaces any AI-generated instances
+                safe.instances = society.instances;
+                safe.terrain = [...(safe.terrain || []), ...society.terrain];
+                console.log(`🏙️  Full society generated: ${society.instances.length} instances, ${society.terrain.length} terrain ops`);
+                console.log('   Zones: Police Station, School, Hospital, Fire Station, Park, Commercial, Residential (×3)');
+            } catch (tErr) {
+                console.warn('⚠️  Society generation failed:', tErr.message, tErr.stack);
+            }
+        }
+
+        // ── Enhanced background buildings ────────────────────
+        // Replace simple block buildings with detailed multi-story facades
+        const sceneWantsBackgroundStructures = Array.isArray(scenePlan?.environment?.surroundingElements)
+            && scenePlan.environment.surroundingElements.some(el => el === 'background_structures' || el === 'buildings');
+        const sceneRequestsExpandedWorld = scenePlan?.environment?.expandedWorld === true
+            || ['town', 'outdoor_park', 'floating_island', 'arena'].includes(scenePlan?.sceneType);
+        const sceneIsSchoolCampus = scenePlan?.environment?.schoolCampusExterior === true
+            || scenePlan?.sceneType === 'classroom';
+        if (scenePlan && generateEnv !== false && sceneWantsBackgroundStructures && sceneRequestsExpandedWorld && !sceneIsSchoolCampus) {
+            try {
+                const dims = scenePlan.dimensions || { width: 50, depth: 40 };
+                const halfW = dims.width / 2;
+                const halfD = dims.depth / 2;
+                const gl = scenePlan.groundLevel || 0;
+                const buildingPositions = [
+                    { x: halfW * 1.6, z: 0, floors: 3 + Math.floor(Math.random() * 4) },
+                    { x: -halfW * 1.6, z: 0, floors: 2 + Math.floor(Math.random() * 5) },
+                    { x: 0, z: -halfD * 1.6, floors: 2 + Math.floor(Math.random() * 3) },
+                ];
+                let bgCount = 0;
+                for (const bp of buildingPositions) {
+                    if (bgCount > 150) break; // Cap total background building parts
+                    const bldg = generateBuilding({
+                        x: bp.x,
+                        z: bp.z,
+                        groundLevel: gl,
+                        floors: bp.floors,
+                        width: 14 + Math.random() * 10,
+                        depth: 10 + Math.random() * 6,
+                        detailLevel: 'medium',
+                        groundFloorShop: true,
+                    });
+                    safe.instances = [...(safe.instances || []), ...bldg.instances];
+                    bgCount += bldg.instances.length;
+                }
+                if (bgCount > 0) {
+                    console.log(`🏢 Enhanced buildings: added ${bgCount} detailed background building parts`);
+                }
+            } catch (bldgErr) {
+                console.warn('⚠️  Building generation failed:', bldgErr.message);
+            }
+        }
+
         // ── Environment generation ───────────────────────────
         if (generateEnv !== false && scenePlan) {
             try {
                 const envResult = generateEnvironment(scenePlan);
+                const requestedPhase = Math.max(1, Math.min(3, inferRequestedPhase(prompt, session)));
+                if (usedDeterministicScenePlan && requestedPhase === 1) {
+                    // Keep phase-1 focused on core layout; defer dense surroundings to later phases.
+                    envResult.instances = envResult.instances.slice(0, 14);
+                    envResult.terrain = envResult.terrain.slice(0, 4);
+                }
                 if (envResult.instances.length > 0 || envResult.terrain.length > 0) {
                     safe.instances = [...(safe.instances || []), ...envResult.instances];
                     safe.terrain = [...(safe.terrain || []), ...envResult.terrain];
                     console.log(`🌍 Added ${envResult.instances.length} environment instances, ${envResult.terrain.length} terrain ops`);
                 }
+
+                if (usedDeterministicScenePlan && requestedPhase === 1) {
+                    const boundaryNames = new Set(
+                        (safe.instances || [])
+                            .map(inst => String(inst?.properties?.Name || ''))
+                            .filter(Boolean)
+                    );
+                    const hasBoundary = [...boundaryNames].some(name => /boundary|waterbound/i.test(name));
+                    if (!hasBoundary) {
+                        const boundaryFallback = buildDeterministicBoundaryInstances(scenePlan);
+                        safe.instances = [...(safe.instances || []), ...boundaryFallback];
+                        safe.warnings = [...(safe.warnings || []), 'Inserted deterministic map boundaries for phase-1 world completeness.'];
+                        console.log(`[${requestId}] injected deterministic boundary instances`);
+                    }
+                }
             } catch (envErr) {
                 console.warn('⚠️  Environment generation failed:', envErr.message);
+            }
+        }
+
+        // Interior classroom / lobby: strip ALL terrain ops (AI + env merge).
+        // Also strip when preset matches classroom/lobby without campus keywords,
+        // even if scenePlan is null (quick mode) or AI omitted environment.interiorOnly.
+        const roomPresetForStrip = identifyRoomType(prompt);
+        const stripInteriorTerrain = scenePlan?.environment?.interiorOnly
+            || scenePlan?.environment?.skipTerrainOperations
+            || (scenePlan?.sceneType === 'classroom' && !scenePlan?.environment?.expandedWorld)
+            || (scenePlan?.sceneType === 'classroom' && promptRequestsInteriorOnly(prompt))
+            || ((roomPresetForStrip?.key === 'classroom' || roomPresetForStrip?.key === 'lobby')
+                && !promptRequestsExpandedSurroundings(prompt));
+        if (stripInteriorTerrain && Array.isArray(safe.terrain) && safe.terrain.length > 0) {
+            const n = safe.terrain.length;
+            safe.terrain = [];
+            safe.warnings = [...(safe.warnings || []),
+                `Removed ${n} Workspace.Terrain fill(s) for this school/interior shell (Part floors + Part-based exterior). Clear Terrain in Studio once if old grass remains.`];
+            console.log(`[${requestId}] stripped ${n} terrain op(s) — no Terrain fills for this layout`);
+        }
+
+        // ── Phase-1 composition guard (generic scene quality) ─
+        // Ensures the first phase of scene/map requests includes a usable core structure,
+        // preventing "terrain-only" or overly sparse architectural output.
+        if (
+            isSceneLikePrompt(prompt)
+            && safe.currentPhase === 1
+            && safe.totalPhases > 1
+        ) {
+            const structuralCount = countStructuralInstances(safe.instances || []);
+            if ((structuralCount < 4 || !hasClosedShell(safe.instances || [])) && !hasExistingLayoutShell(safe.instances || [])) {
+                const fallbackStructure = buildCoreStructureFallback(scenePlan);
+                safe.instances = [...(safe.instances || []), ...fallbackStructure];
+                safe.warnings = [
+                    ...(safe.warnings || []),
+                    'Phase 1 had weak architecture; backend injected a core structure shell for coherence.',
+                ];
+                console.log(`[${requestId}] injected core structure fallback for phase-1 coherence`);
             }
         }
 
@@ -2260,6 +3067,11 @@ app.post('/generate', apiLimiter, async (req, res) => {
         // [G3] Cross-reference check
         const crossRefWarnings = checkCrossReferences(safe);
         const allWarnings = [...crossRefWarnings, ...(sceneValidation.warnings || [])];
+        if (shouldForceDetailed) {
+            allWarnings.push(
+                'Quick mode was auto-upgraded to Detailed for this request to preserve scene planning and reference-image quality.'
+            );
+        }
         if (imageWarnings.length > 0) {
             allWarnings.push(...imageWarnings);
         }
@@ -2274,9 +3086,105 @@ app.post('/generate', apiLimiter, async (req, res) => {
             console.error('Validation ERRORS (should block apply):', sceneValidation.errors);
         }
 
+        // ── Coherence validation gate (critical checks) ─────
+        if (isSceneLikePrompt(prompt)) {
+            const critical = [];
+            const structureCount = countStructuralInstances(safe.instances || []);
+            const hasShell = hasClosedShell(safe.instances || []);
+            const envScore = countEnvironmentSignals(safe.instances || [], safe.terrain || []);
+            const expectsWorldLayer = !!(scenePlan && generateEnv !== false && scenePlan.environment?.generateSurroundings);
+
+            if (safe.currentPhase === 1 && safe.totalPhases > 1 && (!hasShell || structureCount < 4)) {
+                critical.push('Phase 1 failed coherence check: missing core structure shell (floor/roof/walls).');
+            }
+
+            if (expectsWorldLayer && envScore < 8 && !scenePlan?.environment?.interiorOnly && !scenePlan?.environment?.skipTerrainOperations) {
+                critical.push('World composition check failed: surrounding environment is too sparse for a playable map.');
+            }
+
+            if (critical.length > 0) {
+                safe.validationErrors = [...(safe.validationErrors || []), ...critical];
+                safe.warnings = [...(safe.warnings || []), 'Output failed coherence checks and should be regenerated.'];
+                console.error(`[${requestId}] coherence gate blocked apply:`, critical);
+            }
+        }
+
         // ── Attach scene plan to response for plugin preview ─
         if (scenePlanText) {
             safe.scenePlan = scenePlanText;
+        }
+        safe.generationMode = generationMode;
+
+        // ── Atmospheric lighting configuration ───────────────
+        // Configure Roblox Lighting service for room mood/atmosphere
+        if (roomLayout && roomLayout.lighting) {
+            const rl = roomLayout.lighting;
+            const ambColor = rl.ambientColor || [55, 50, 45];
+            // Use image-derived lighting if available
+            const lightOverride = imageLayoutOverrides?.lightOverride;
+            const isWarm = lightOverride
+                ? (lightOverride.mood === 'warm')
+                : rl.type === 'warm_pendants';
+            const isDark = roomLayout.ceilingColor && roomLayout.ceilingColor[0] < 100;
+            const isClassInterior = roomLayout.sceneType === 'classroom' || roomLayout.sceneType === 'lobby';
+            const defaultBrightness = lightOverride?.brightness
+                ?? (isDark ? 0.8 : (isClassInterior ? 1.15 : 1.5));
+            safe.lightingConfig = {
+                Ambient:                  lightOverride?.ambientColor || ambColor,
+                OutdoorAmbient:           [80, 80, 90],
+                Brightness:               defaultBrightness,
+                ClockTime:                isWarm ? 18 : 14,
+                GeographicLatitude:       35,
+                FogEnd:                   400,
+                FogColor:                 isDark ? [30, 28, 25] : [192, 190, 188],
+                ColorShift_Top:           isWarm ? [255, 240, 210] : [240, 240, 245],
+                ColorShift_Bottom:        isWarm ? [40, 30, 20]  : [30, 30, 35],
+                EnvironmentDiffuseScale:  0.5,
+                EnvironmentSpecularScale: 0.3,
+                ExposureCompensation:     isDark ? 0.5 : (isClassInterior ? -0.15 : 0.0),
+                GlobalShadows:            isClassInterior,
+            };
+            console.log(`💡 Atmospheric lighting: ${isWarm ? 'warm evening' : 'neutral daylight'} mood configured`);
+        }
+
+        // ── Image analysis summary card (for plugin UI) ──────
+        // Attach summary card so plugin can display what was extracted
+        if (imageAnalysisSummaryCard) {
+            safe.imageAnalysisSummaryCard = imageAnalysisSummaryCard;
+            console.log(`🃏 Image analysis summary card attached (room=${imageAnalysisSummaryCard.roomType} confidence=${imageAnalysisSummaryCard.confidenceLabel})`);
+        }
+
+        // ── Quality evaluation (multi-criteria scoring) ──────
+        if (isSceneLikePrompt(prompt)) {
+            try {
+                const qualityResult = evaluateSceneQuality(safe, {
+                    scenePlan,
+                    roomLayout: roomLayout || null,
+                    prompt,
+                    expectEnvironment: !!(scenePlan && generateEnv !== false && scenePlan.environment?.generateSurroundings),
+                });
+                safe.quality = qualityResult;
+                console.log(
+                    `[${requestId}] quality: ${qualityResult.grade} (${qualityResult.overall}) — ` +
+                    Object.entries(qualityResult.scores).map(([k, v]) => `${k}=${v}`).join(' ')
+                );
+
+                // If grade is poor, add a clear warning
+                if (qualityResult.grade === 'poor') {
+                    safe.warnings = [
+                        ...(safe.warnings || []),
+                        `Quality grade: POOR (${qualityResult.overall}). The output is far below production quality.`,
+                        ...qualityResult.feedback.filter(f => f.includes('Missing') || f.includes('0%') || f.includes('empty')),
+                    ];
+                } else if (qualityResult.grade === 'weak') {
+                    safe.warnings = [
+                        ...(safe.warnings || []),
+                        `Quality grade: WEAK (${qualityResult.overall}). Output needs significant improvement.`,
+                    ];
+                }
+            } catch (qualErr) {
+                console.warn('⚠️  Quality evaluation failed:', qualErr.message);
+            }
         }
 
         // Store assistant reply in history
@@ -2287,13 +3195,16 @@ app.post('/generate', apiLimiter, async (req, res) => {
         session.lastResponse = buildLastResponseState(safe);
         conversations.set(conversationId, session);
 
+        console.log(
+            `[${requestId}] done in ${Date.now() - startedAt}ms instances=${(safe.instances || []).length} scripts=${(safe.scripts || []).length} terrain=${(safe.terrain || []).length} warnings=${(safe.warnings || []).length}`
+        );
         return res.json(safe);
 
     } catch (err) {
         session.messages = session.messages.slice(0, historyLengthBeforeTurn);
 
         // [B2] Structured, actionable error messages
-        console.error(`${AI_PROVIDER} error after retries:`, err);
+        console.error(`[${requestId}] ${AI_PROVIDER} error after retries:`, err);
 
         const providerName = ACTIVE_PROVIDER.displayName;
         const keyName      = ACTIVE_PROVIDER.keyName;
