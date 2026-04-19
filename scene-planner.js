@@ -827,12 +827,14 @@ function generateEnvironment(scenePlan) {
         if (element === 'trees_sparse' || element === 'trees' || element === 'trees_dense') {
             const treeMeta = getTemplatePlacementMetadata('deciduous_tree_medium');
             const treeCount = Math.min(
-                element === 'trees_dense' ? 8 : 6,
+                schoolCampusExterior ? (element === 'trees_dense' ? 10 : 8) : (element === 'trees_dense' ? 8 : 6),
                 Math.floor((maxEnvInstances - envInstanceCount) / 5)
             );
             for (let i = 0; i < treeCount; i++) {
                 const angle = (i / treeCount) * Math.PI * 2 + Math.random() * 0.5;
-                const dist = halfW * 0.8 + Math.random() * (boundHalfW - halfW) * 0.6;
+                const dist = schoolCampusExterior
+                    ? (Math.max(halfW, halfD) * 0.92 + Math.random() * Math.max((boundHalfW - halfW) * 0.8, 10))
+                    : (halfW * 0.8 + Math.random() * (boundHalfW - halfW) * 0.6);
                 const x = Math.cos(angle) * dist;
                 const z = Math.sin(angle) * dist;
                 const pos = [x, groundLevel, z];
@@ -840,7 +842,9 @@ function generateEnvironment(scenePlan) {
                     && !isPlacementTooClose(pos, treeMeta.footprintRadius, envPlacedPositions, treeMeta.preferredSpacing * 0.2)) {
                     envPlacedPositions.push(buildPlacementEntry(pos, treeMeta));
                     envPlacements.push({
-                        template: Math.random() > 0.5 ? 'deciduous_tree_medium' : 'pine_tree',
+                        template: schoolCampusExterior
+                            ? (Math.random() > 0.35 ? 'deciduous_tree_medium' : 'pine_tree')
+                            : (Math.random() > 0.5 ? 'deciduous_tree_medium' : 'pine_tree'),
                         position: pos,
                         rotation: Math.random() * 360,
                     });
@@ -892,10 +896,15 @@ function generateEnvironment(scenePlan) {
 
         if (element === 'lamps' || element === 'street_lamps') {
             const lampMeta = getTemplatePlacementMetadata('street_lamp');
-            const lampCount = Math.min(4, Math.floor((maxEnvInstances - envInstanceCount) / 4));
+            const lampCount = Math.min(
+                schoolCampusExterior ? 8 : 4,
+                Math.floor((maxEnvInstances - envInstanceCount) / 4)
+            );
             for (let i = 0; i < lampCount; i++) {
                 const angle = (i / lampCount) * Math.PI * 2;
-                const dist = halfW * 0.5;
+                const dist = schoolCampusExterior
+                    ? Math.max(halfW, halfD) * 0.82
+                    : halfW * 0.5;
                 const pos = [Math.cos(angle) * dist, groundLevel, Math.sin(angle) * dist];
                 if (!isReservedArea(pos, 2)
                     && !isPlacementTooClose(pos, lampMeta.footprintRadius, envPlacedPositions, lampMeta.preferredSpacing * 0.2)) {
@@ -905,6 +914,24 @@ function generateEnvironment(scenePlan) {
                         position: pos,
                     });
                     envInstanceCount += 4;
+                }
+            }
+
+            // Campus realism: add two entrance lamps framing the forecourt.
+            if (schoolCampusExterior && envInstanceCount + 8 <= maxEnvInstances) {
+                const entranceLamps = [
+                    [-halfW * 0.45, groundLevel, halfD - 3.8],
+                    [halfW * 0.45, groundLevel, halfD - 3.8],
+                ];
+                for (const p of entranceLamps) {
+                    if (!isReservedArea(p, 2)) {
+                        envPlacements.push({
+                            template: 'street_lamp',
+                            position: p,
+                            rotation: 0,
+                        });
+                        envInstanceCount += 4;
+                    }
                 }
             }
         }
@@ -1075,6 +1102,23 @@ function generateEnvironment(scenePlan) {
                     });
                     envInstanceCount += 5;
 
+                    // Classroom/lobby campus: add a forecourt walkway to the main building.
+                    if (schoolCampusExterior && envInstanceCount + 1 <= maxEnvInstances) {
+                        instances.push({
+                            className: 'Part',
+                            parent: roadEwName,
+                            properties: {
+                                Name: 'CampusForecourtWalk',
+                                Size: [14, 0.22, Math.max(8, halfD - 4)],
+                                Position: [0, groundLevel + 0.12, halfD - (Math.max(8, halfD - 4) / 2)],
+                                Color: [198, 195, 190],
+                                Anchored: true,
+                                Material: 'Concrete',
+                            },
+                        });
+                        envInstanceCount += 1;
+                    }
+
                     // Crosswalk at intersection
                     if (envInstanceCount + 5 <= maxEnvInstances) {
                         const cwX = roadX;
@@ -1205,7 +1249,57 @@ function generateEnvironment(scenePlan) {
                             Transparency: 0.42,
                         },
                     });
-                    buildingParts += 1;
+                    instances.push({
+                        className: 'Part',
+                        parent: modelName,
+                        properties: {
+                            Name: 'EntranceCanopy',
+                            Size: [6.2, 0.25, 2.2],
+                            Position: [bx, groundLevel + 8.2, bz + bDepth / 2 + 1.15],
+                            Color: [84, 90, 98],
+                            Anchored: true,
+                            Material: 'Metal',
+                        },
+                    });
+                    instances.push({
+                        className: 'Part',
+                        parent: modelName,
+                        properties: {
+                            Name: 'BasePlinth',
+                            Size: [bWidth + 1.2, 1.2, bDepth + 1.2],
+                            Position: [bx, groundLevel + 0.6, bz],
+                            Color: [122, 126, 132],
+                            Anchored: true,
+                            Material: 'Concrete',
+                        },
+                    });
+                    instances.push({
+                        className: 'Part',
+                        parent: modelName,
+                        properties: {
+                            Name: 'WindowBand_Left',
+                            Size: [0.22, 2.1, bDepth * 0.58],
+                            Position: [bx - bWidth / 2 - 0.14, groundLevel + bHeight * 0.56, bz],
+                            Color: [205, 216, 230],
+                            Anchored: true,
+                            Material: 'Glass',
+                            Transparency: 0.46,
+                        },
+                    });
+                    instances.push({
+                        className: 'Part',
+                        parent: modelName,
+                        properties: {
+                            Name: 'WindowBand_Right',
+                            Size: [0.22, 2.1, bDepth * 0.58],
+                            Position: [bx + bWidth / 2 + 0.14, groundLevel + bHeight * 0.56, bz],
+                            Color: [205, 216, 230],
+                            Anchored: true,
+                            Material: 'Glass',
+                            Transparency: 0.46,
+                        },
+                    });
+                    buildingParts += 5;
                 }
                 envInstanceCount += buildingParts;
             }

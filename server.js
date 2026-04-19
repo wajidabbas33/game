@@ -3127,16 +3127,18 @@ app.post('/generate', apiLimiter, async (req, res) => {
                 : rl.type === 'warm_pendants';
             const isDark = roomLayout.ceilingColor && roomLayout.ceilingColor[0] < 100;
             const isClassInterior = roomLayout.sceneType === 'classroom' || roomLayout.sceneType === 'lobby';
+            const isSchoolScene = roomLayout.sceneType === 'classroom' || roomLayout.sceneType === 'lobby';
             const defaultBrightness = lightOverride?.brightness
                 ?? (isDark ? 0.8 : (isClassInterior ? 1.15 : 1.5));
             safe.lightingConfig = {
                 Ambient:                  lightOverride?.ambientColor || ambColor,
-                OutdoorAmbient:           [80, 80, 90],
+                OutdoorAmbient:           isSchoolScene ? [120, 126, 136] : [80, 80, 90],
                 Brightness:               defaultBrightness,
                 ClockTime:                isWarm ? 18 : 14,
                 GeographicLatitude:       35,
-                FogEnd:                   400,
-                FogColor:                 isDark ? [30, 28, 25] : [192, 190, 188],
+                FogStart:                 isSchoolScene ? 220 : 0,
+                FogEnd:                   isSchoolScene ? 1400 : 400,
+                FogColor:                 isDark ? [30, 28, 25] : (isSchoolScene ? [178, 194, 214] : [192, 190, 188]),
                 ColorShift_Top:           isWarm ? [255, 240, 210] : [240, 240, 245],
                 ColorShift_Bottom:        isWarm ? [40, 30, 20]  : [30, 30, 35],
                 EnvironmentDiffuseScale:  0.5,

@@ -161,10 +161,16 @@ const ROOM_LAYOUTS = {
                 customObjects: [
                     // Front wall: realistic chalkboard + whiteboard set (with frames/trays)
                     { name: 'ChalkBoard', className: 'Part', size: [11.5, 5.2, 0.22], material: 'Slate', color: [24, 58, 34], wallMount: 'front', elevation: 5.2, wallGap: 0.18, offsetX: -11 },
-                    { name: 'ChalkBoardFrame', className: 'Part', size: [12.1, 5.8, 0.28], material: 'WoodPlanks', color: [94, 70, 42], wallMount: 'front', elevation: 5.2, wallGap: 0.36, offsetX: -11 },
+                    { name: 'ChalkFrameTop', className: 'Part', size: [12.1, 0.32, 0.26], material: 'WoodPlanks', color: [94, 70, 42], wallMount: 'front', elevation: 7.96, wallGap: 0.36, offsetX: -11 },
+                    { name: 'ChalkFrameBottom', className: 'Part', size: [12.1, 0.32, 0.26], material: 'WoodPlanks', color: [94, 70, 42], wallMount: 'front', elevation: 2.44, wallGap: 0.36, offsetX: -11 },
+                    { name: 'ChalkFrameLeft', className: 'Part', size: [0.32, 5.8, 0.26], material: 'WoodPlanks', color: [94, 70, 42], wallMount: 'front', elevation: 5.2, wallGap: 0.36, offsetX: -16.89 },
+                    { name: 'ChalkFrameRight', className: 'Part', size: [0.32, 5.8, 0.26], material: 'WoodPlanks', color: [94, 70, 42], wallMount: 'front', elevation: 5.2, wallGap: 0.36, offsetX: -5.11 },
                     { name: 'ChalkTray', className: 'Part', size: [11.2, 0.24, 0.7], material: 'WoodPlanks', color: [108, 82, 50], wallMount: 'front', elevation: 2.48, wallGap: 0.28, offsetX: -11 },
                     { name: 'Whiteboard', className: 'Part', size: [18, 7, 0.2], material: 'SmoothPlastic', color: [252, 252, 252], wallMount: 'front', elevation: 5.8, wallGap: 0.2, offsetX: 5 },
-                    { name: 'WhiteboardFrame', className: 'Part', size: [18.6, 7.6, 0.28], material: 'Metal', color: [130, 132, 138], wallMount: 'front', elevation: 5.8, wallGap: 0.4, offsetX: 5 },
+                    { name: 'WhiteFrameTop', className: 'Part', size: [18.6, 0.28, 0.26], material: 'Metal', color: [130, 132, 138], wallMount: 'front', elevation: 9.46, wallGap: 0.4, offsetX: 5 },
+                    { name: 'WhiteFrameBottom', className: 'Part', size: [18.6, 0.28, 0.26], material: 'Metal', color: [130, 132, 138], wallMount: 'front', elevation: 2.14, wallGap: 0.4, offsetX: 5 },
+                    { name: 'WhiteFrameLeft', className: 'Part', size: [0.28, 7.6, 0.26], material: 'Metal', color: [130, 132, 138], wallMount: 'front', elevation: 5.8, wallGap: 0.4, offsetX: -4.16 },
+                    { name: 'WhiteFrameRight', className: 'Part', size: [0.28, 7.6, 0.26], material: 'Metal', color: [130, 132, 138], wallMount: 'front', elevation: 5.8, wallGap: 0.4, offsetX: 14.16 },
                     { name: 'WhiteboardTray', className: 'Part', size: [18, 0.35, 0.9], material: 'Metal', color: [120, 118, 115], wallMount: 'front', elevation: 2.15, wallGap: 0.35, offsetX: 5 },
                     // Teacher station — less bulky proportions, clearer material contrast.
                     { name: 'TeacherDesk', className: 'Part', size: [8.8, 2.7, 3.2], material: 'WoodPlanks', color: [104, 74, 42], wallMount: 'front', elevation: 2.35, wallGap: 5.7 },
@@ -1944,6 +1950,12 @@ function generateArchitecturalShell(roomLayout, scenePlan) {
     // ── Baseboards (classroom): floor-line trim so wall/wall/ceiling corners read as real edges ─
     if (roomLayout.sceneType === 'classroom') {
         const floorTop = gl + 1;
+        const facadeDoorW = (roomLayout.doorConfig && roomLayout.doorConfig.width) || 4;
+        const facadeDoorH = (roomLayout.doorConfig && roomLayout.doorConfig.height) || 7;
+        const facadeDoorPos = (roomLayout.doorConfig && roomLayout.doorConfig.position) || 'left';
+        let facadeDoorOffset = 0;
+        if (facadeDoorPos === 'left') facadeDoorOffset = -dims.width * 0.3;
+        if (facadeDoorPos === 'right') facadeDoorOffset = dims.width * 0.3;
         const bbH = 0.42;
         const bbY = floorTop + bbH / 2;
         const bbColor = [88, 82, 76];
@@ -1999,6 +2011,88 @@ function generateArchitecturalShell(roomLayout, scenePlan) {
                 Color: bbColor,
                 Anchored: true,
                 Material: 'Wood',
+            },
+        });
+
+        // Exterior facade cues so the classroom does not read as a plain white box.
+        const facadeZ = -halfD - wallT / 2 - 0.06;
+        instances.push({
+            className: 'Part',
+            parent: modelName,
+            properties: {
+                Name: 'FacadeBand_Front',
+                Size: [dims.width * 0.8, 1.25, 0.18],
+                Position: [0, gl + wallH * 0.58, facadeZ],
+                Color: [214, 220, 228],
+                Anchored: true,
+                Material: 'SmoothPlastic',
+            },
+        });
+        instances.push({
+            className: 'Part',
+            parent: modelName,
+            properties: {
+                Name: 'FacadeBase_Front',
+                Size: [dims.width * 0.92, 1.15, 0.22],
+                Position: [0, gl + 0.62, facadeZ],
+                Color: [122, 126, 132],
+                Anchored: true,
+                Material: 'Concrete',
+            },
+        });
+        // Side facade window strips (outside only) to break boxy silhouette.
+        const sideBandH = 2.1;
+        const sideBandZ = dims.depth * 0.44;
+        const sideBandY = gl + wallH * 0.56;
+        instances.push({
+            className: 'Part',
+            parent: modelName,
+            properties: {
+                Name: 'FacadeBand_Left',
+                Size: [0.16, sideBandH, sideBandZ],
+                Position: [-halfW - 0.08, sideBandY, 0],
+                Color: [208, 218, 230],
+                Anchored: true,
+                Material: 'Glass',
+                Transparency: 0.48,
+            },
+        });
+        instances.push({
+            className: 'Part',
+            parent: modelName,
+            properties: {
+                Name: 'FacadeBand_Right',
+                Size: [0.16, sideBandH, sideBandZ],
+                Position: [halfW + 0.08, sideBandY, 0],
+                Color: [208, 218, 230],
+                Anchored: true,
+                Material: 'Glass',
+                Transparency: 0.48,
+            },
+        });
+        // Rear accent band to read like institutional facade detail.
+        instances.push({
+            className: 'Part',
+            parent: modelName,
+            properties: {
+                Name: 'FacadeBand_Back',
+                Size: [dims.width * 0.72, 1.05, 0.16],
+                Position: [0, gl + wallH * 0.58, halfD + wallT / 2 + 0.06],
+                Color: [210, 216, 224],
+                Anchored: true,
+                Material: 'SmoothPlastic',
+            },
+        });
+        instances.push({
+            className: 'Part',
+            parent: modelName,
+            properties: {
+                Name: 'DoorCanopy_Back',
+                Size: [facadeDoorW + 1.4, 0.24, 1.5],
+                Position: [facadeDoorOffset, gl + facadeDoorH + 0.7, halfD + 0.62],
+                Color: [82, 88, 96],
+                Anchored: true,
+                Material: 'Metal',
             },
         });
     }
